@@ -59,7 +59,7 @@ architecture Behavioral of wots_key_and_mask_gen is
 begin
 
     --------- Wire up the hash module:
-	sha : entity work.sha256
+	sha : entity work.sha_256
 	port map(
 		clk     => clk,
 		reset   => reset,

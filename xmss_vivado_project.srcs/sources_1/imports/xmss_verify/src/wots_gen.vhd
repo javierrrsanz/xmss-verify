@@ -51,7 +51,7 @@ begin
     ------------------------------------------------------------
     
     -- Wire up the SHA256 Module
-	wots_hash : entity work.sha256
+	wots_hash : entity work.sha_256
 	port map(
 		clk     => clk,
 		reset   => '0',

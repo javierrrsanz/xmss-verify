@@ -68,20 +68,6 @@ begin
             q.mnext => mnext(I),
             q.o => hash_outputs(I));
       end generate SWITCH_SHA_FAST;
-      
-      SWITCH_SHAKE : if (HASH_FUNCTION = "SHAKE") generate
-        SHAKE : entity work.absorb_message_shake 
-        port map(
-            clk     => clk,
-            reset => reset,
-            d.enable  => enable(I),
-            d.len  => d.len,
-            d.input => d.input,
-            d.halt => r_in.halt_indicator(I),
-            q.done  => done(I),
-            q.mnext => mnext(I),
-            q.o => hash_outputs(I));
-      end generate SWITCH_SHAKE;
    end generate HashCore;
    
    q.idle <= '1' when r.busy_indicator = ALL_ZEROS else '0';

@@ -13,7 +13,7 @@ architecture default of sha256_tb is
 	signal message : std_logic_vector(31 downto 0);
 	signal hash : std_logic_vector(255 downto 0);
 begin
-	uut : entity work.sha256
+	uut : entity work.sha_256
 	port map(
 		clk     => clk,
 		reset   => reset,
