@@ -14,6 +14,7 @@ package sha_comp is
        enable  : std_logic;
 	   last    : std_logic;
 	   message : std_logic_vector(31 downto 0);
+	   halt    : std_logic; -- AGREGADO, 
     end record;
     
     type sha_output_type is record
@@ -22,7 +23,7 @@ package sha_comp is
 	   hash    : std_logic_vector(255 downto 0);
 	end record;
 	
-	component sha
+	component sha256
         port (
            clk   : in std_logic;
            reset : in std_logic;
@@ -32,18 +33,20 @@ package sha_comp is
 	
 	-- Records for the SHA_M module // Message digest
 	type sha_m_input_type is record
-	   prep    :  std_logic;
 	   message :  std_logic_vector(31 downto 0);
-	   w       :  unsigned(31 downto 0);
+	   ctr     : integer range 0 to 64;         -- Necesario para sha256_m.vhd
+       halt    : std_logic;                     -- Necesario para sha256_m.vhd 
+	   
 	end record;
 	
 	type sha_m_output_type is record
 	   w       : unsigned(31 downto 0);
 	end record;
 	
-	component sha_m
+	component sha256_m
         port (
            clk   : in std_logic;
+           reset : in std_logic;
            d     : in sha_m_input_type;
            q     : out sha_m_output_type);
 	end component;
@@ -60,7 +63,7 @@ package sha_comp is
 	   hash : std_logic_vector(255 downto 0);
 	end record;
 	
-	component sha_h
+	component sha256_h
         port (
            clk   : in std_logic;
            d     : in sha_h_input_type;

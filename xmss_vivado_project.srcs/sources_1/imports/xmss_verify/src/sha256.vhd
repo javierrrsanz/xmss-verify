@@ -14,19 +14,19 @@ use work.params.ALL;
 use work.sha_comp.all;
 use work.sha_functions.ALL;
 
-entity sha_256 is
+entity sha256 is
 port(
 	clk     : in  std_logic;
 	reset   : in  std_logic;
 	d       : in  sha_input_type;
 	q       : out sha_output_type);
-end sha_256;
+end sha256;
 
 --  For a SHA256 developement guideline, see
 --  http://www.iwar.org.uk/comsec/resources/cipher/sha256-384-512.pdf
 --  The parameter naming of this module largely follows this document.
 
-architecture Behavioral of sha_256 is
+architecture Behavioral of sha256 is
     type state_type is (S_IDLE, S_ROUND, S_LOOP);
     
     constant h1_init : unsigned(31 downto 0) := x"6a09e667";

@@ -9,17 +9,18 @@ end sha256_tb;
 architecture default of sha256_tb is
 	constant clk_period : time := 5 ns;
 
-	signal clk, reset, enable, last, done, mnext : std_logic;
+	signal clk, reset, enable, last, halt, done, mnext : std_logic;
 	signal message : std_logic_vector(31 downto 0);
 	signal hash : std_logic_vector(255 downto 0);
 begin
-	uut : entity work.sha_256
+	uut : entity work.sha256
 	port map(
 		clk     => clk,
 		reset   => reset,
 		d.enable  => enable,
 		d.last    => last,
 		d.message => message,
+		d.halt    => halt,
 		q.done    => done,
 		q.mnext   => mnext,
 		q.hash    => hash);

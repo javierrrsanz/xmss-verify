@@ -44,7 +44,7 @@ architecture Behavioral of absorb_message is
 begin
 
     --------- Wire up the hash module:
-	sha_256 : entity work.sha_256
+	sha256 : entity work.sha256
 	port map(
 		clk     => clk,
 		reset   => reset,
