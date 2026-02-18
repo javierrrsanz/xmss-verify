@@ -37,9 +37,10 @@ begin
 	process
 	begin
 		wait for 10 * clk_period;
-
+        
 		reset <= '1';
 		enable <= '0';
+		halt <= '0';
 		last <= '0';
 		wait for 10 * clk_period;
         message <= (31 => '1', others => '0');
