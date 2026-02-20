@@ -6,7 +6,7 @@ use work.sha_comp.ALL;
 entity sha256_tb is
 end sha256_tb;
 
-architecture default of sha256_tb is
+architecture Behavioral of sha256_tb is
     constant clk_period : time := 10 ns; 
     
     -- Señales del DUT
@@ -263,4 +263,4 @@ begin
         report "========================================================";
         wait;
     end process;
-end default;
+end Behavioral;
