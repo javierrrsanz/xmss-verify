@@ -6,7 +6,7 @@ use work.sha_comp.ALL;
 entity sha256_tb is
 end sha256_tb;
 
-architecture Behavioral of sha256_tb is
+architecture default of sha256_tb is
     constant clk_period : time := 10 ns; 
     
     -- Señales del DUT
@@ -18,7 +18,6 @@ architecture Behavioral of sha256_tb is
     -- Vectores Esperados (NIST FIPS 180-4)
     constant EXP_EMPTY : std_logic_vector(255 downto 0) := x"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     constant EXP_ABC   : std_logic_vector(255 downto 0) := x"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-    -- Vector multi-bloque (56 bytes): "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
     constant EXP_MULTI : std_logic_vector(255 downto 0) := x"248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1";
 
     -- Función auxiliar para HEX
@@ -52,24 +51,27 @@ begin
 
     stim_proc: process
         procedure send_block(
-            data_words : in std_logic_vector(0 to 511); -- 16 palabras de 32 bits concatenadas
-            is_last    : in boolean
+            data_words : in std_logic_vector(0 to 511); 
+            is_last    : in boolean;
+            is_first   : in boolean
         ) is
         begin
-            -- Esperar a que el core pida datos (o sea el inicio)
-            if enable = '1' and mnext = '0' then
-                wait until mnext = '1';
+            -- Espera síncrona pura al handshake del núcleo
+            if not is_first then
+                loop
+                    wait until rising_edge(clk);
+                    exit when mnext = '1';
+                end loop;
             end if;
             
             if is_last then last <= '1'; else last <= '0'; end if;
             
-            -- Inyectar 16 palabras (una por ciclo)
+            -- Inyección estricta síncrona de 16 palabras
             for i in 0 to 15 loop
                 message <= data_words(i*32 to (i*32)+31);
-                wait for clk_period;
+                wait until rising_edge(clk);
             end loop;
             
-            -- Limpiar bus por seguridad
             message <= (others => '0');
         end procedure;
 
@@ -80,6 +82,7 @@ begin
         
         reset <= '1'; enable <= '0'; halt <= '0'; last <= '0';
         wait for clk_period * 5;
+        wait until rising_edge(clk);
         reset <= '0';
         wait for clk_period * 2;
 
@@ -87,12 +90,12 @@ begin
         -- TEST 1: EMPTY STRING
         ------------------------------------------------------------
         report "--> TEST 1: Mensaje Vacio (1 Bloque)" severity note;
+        wait until rising_edge(clk);
         enable <= '1';
-        -- Padding: 1 bit '1' (0x80) + ceros + Length(0)
-        -- Palabra 0: 80000000, Resto 0
-        send_block(x"80000000" & x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", true);
         
-        enable <= '0'; -- Ya enviamos todo
+        send_block(x"80000000" & x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", true, true);
+        
+        enable <= '0'; 
         wait until done = '1';
         wait for clk_period;
         
@@ -106,10 +109,10 @@ begin
         -- TEST 2: "abc"
         ------------------------------------------------------------
         report "--> TEST 2: Mensaje 'abc' (1 Bloque)" severity note;
+        wait until rising_edge(clk);
         enable <= '1';
-        -- "abc" = 61 62 63. Padding bit = 80. -> Palabra 0: 61626380
-        -- Longitud = 24 bits (0x18). Va al final (Palabra 15).
-        send_block(x"61626380" & x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018", true);
+        
+        send_block(x"61626380" & x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018", true, true);
         
         enable <= '0';
         wait until done = '1';
@@ -125,35 +128,25 @@ begin
         -- TEST 3: MULTI-BLOCK (NIST 56 bytes)
         ------------------------------------------------------------
         report "--> TEST 3: Multi-bloque (2 Bloques - Handshake Check)" severity note;
+        wait until rising_edge(clk);
         enable <= '1';
         
-        -- BLOQUE 1: 56 bytes de datos + 0x80 (padding).
-        -- 56 bytes llenan las palabras 0 a 13 completas.
-        -- Palabra 14: Empieza con el byte de padding 0x80, resto 0.
-        -- Palabra 15: 0x00... (No cabe la longitud aqui).
-        -- Datos: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
-        -- Hex: 61626364 62636465 ...
-        
-        -- Enviamos primer bloque (last = false)
         send_block(
-            x"6162636462636465636465666465666765666768666768696768696a68696a6b" & -- W0-W7
-            x"696a6b6c6a6b6c6d6b6c6d6e6c6d6e6f6d6e6f706e6f7071" & -- W8-W13 (Datos)
-            x"80000000" & -- W14 (Padding start)
-            x"00000000",  -- W15 (Relleno, no cabe len)
-            false -- NO es el último
+            x"6162636462636465636465666465666765666768666768696768696a68696a6b" & 
+            x"696a6b6c6a6b6c6d6b6c6d6e6c6d6e6f6d6e6f706e6f7071" & 
+            x"80000000" & 
+            x"00000000",  
+            false, true 
         );
         
-        -- El procedimiento send_block espera automáticamente a 'mnext' si lo llamamos otra vez
         report "    Bloque 1 enviado. Esperando solicitud de Bloque 2..." severity note;
 
-        -- BLOQUE 2: Todo ceros excepto la longitud al final.
-        -- Longitud = 448 bits = 0x1C0
         send_block(
-            x"0000000000000000000000000000000000000000000000000000000000000000" & -- W0-W7
-            x"000000000000000000000000000000000000000000000000" & -- W8-W13
-            x"00000000" & -- W14 (Len High)
-            x"000001C0",  -- W15 (Len Low = 448)
-            true -- AHORA sí es el último
+            x"0000000000000000000000000000000000000000000000000000000000000000" & 
+            x"000000000000000000000000000000000000000000000000" & 
+            x"00000000" & 
+            x"000001C0",  
+            true, false 
         );
  
         enable <= '0';
@@ -164,7 +157,6 @@ begin
         else 
             report "    [FAIL] Test 3 (Multi-block). Falla en la transicion?" severity error;
             report "    Got: " & to_hex_string(hash);
-            report "    Exp: " & to_hex_string(EXP_MULTI);
         end if;
 
         report "========================================================";
@@ -172,4 +164,4 @@ begin
         report "========================================================";
         wait;
     end process;
-end Behavioral;
+end default;
