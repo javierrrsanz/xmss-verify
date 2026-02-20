@@ -51,7 +51,7 @@ begin
 		d.enable  => r.hash_enable,
 		d.halt => d.halt,
 		d.last    => r.last,      
-		d.message => r.message(255 downto 224), 
+		d.message => std_logic_vector(r.message(255 downto 224)), 
 		q         => modules.sha
 		);
 
