@@ -49,25 +49,6 @@ package sha_comp is
            reset : in std_logic;
            d     : in sha_m_input_type;
            q     : out sha_m_output_type);
-	end component;
-	
-	-- Records for the SHA_H module // Main Hash logic
-	type sha_h_input_type is record
-	   init : std_logic;
-	   save : std_logic;
-	   t    : unsigned(5 downto 0);
-	   w    : unsigned(31 downto 0);
-	end record;
-	
-	type sha_h_output_type is record
-	   hash : std_logic_vector(255 downto 0);
-	end record;
-	
-	component sha256_h
-        port (
-           clk   : in std_logic;
-           d     : in sha_h_input_type;
-           q     : out sha_h_output_type);
-	end component;
+	end component;	
 	
 end package;

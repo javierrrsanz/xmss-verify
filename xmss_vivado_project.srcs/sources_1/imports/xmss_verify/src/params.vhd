@@ -34,18 +34,7 @@ package params is
    constant BRAM_XMSS_SIG_WOTS: integer := BRAM_WOTS_KEY + WOTS_LEN; -- 66
    constant BRAM_XMSS_SIG_AUTH : integer := BRAM_XMSS_SIG_WOTS + WOTS_LEN; -- 142
    constant BRAM_XMSS_SIG : integer := BRAM_XMSS_SIG_AUTH + tree_height; --144
-   constant BRAM_MESSAGE : integer := BRAM_XMSS_SIG + 4; -- 148
-   
-   -- constant BRAM_PK : integer := 3;
-   -- constant BRAM_TREEHASH_INTER : integer := 5;
-   -- constant BRAM_WOTS_SK : integer := 1029;
-   -- constant BRAM_WOTS_PK : integer := 1096;
-   -- constant BRAM_XMSS_SIG: integer := 1163;
-   -- constant BRAM_XMSS_SIG_AUTH : integer := 1167;
-   -- constant BRAM_XMSS_SIG_WOTS : integer := 1177;
-   -- constant BRAM_MESSAGE : integer := 1244;
-   -- constant BRAM_TREEHASH_STACK : integer := 1260;
-   
+   constant BRAM_MESSAGE : integer := BRAM_XMSS_SIG + 4; -- 148   
    constant BRAM_ADDR_SIZE : integer := 11;
    constant MAX_MLEN : integer := 2048;
       
