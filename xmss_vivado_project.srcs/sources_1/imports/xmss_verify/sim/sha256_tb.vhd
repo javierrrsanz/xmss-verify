@@ -159,6 +159,105 @@ begin
             report "    Got: " & to_hex_string(hash);
         end if;
 
+------------------------------------------------------------
+        -- TEST 4: 64 Bytes de 0xFF (Corner Case original)
+        ------------------------------------------------------------
+        report "--> TEST 4: 64 Bytes de 0xFF (Corner Case Padding)" severity note;
+        wait until rising_edge(clk); enable <= '1';
+        
+        -- Bloque 1: 64 bytes puros de 0xFF (16 palabras x 32 bits)
+        send_block(
+            x"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" & 
+            x"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",  
+            false, true 
+        );
+        
+        -- Bloque 2: Padding (0x80...) y longitud al final (512 bits = 0x0200)
+        send_block(
+            x"8000000000000000000000000000000000000000000000000000000000000000" & 
+            x"0000000000000000000000000000000000000000000000000000000000000200",  
+            true, false 
+        );
+ 
+        enable <= '0';
+        wait until done = '1';
+        wait for clk_period;
+
+        -- Verificación del hash para 64 bytes de 0xFF
+        if hash = x"8667e718294e9e0df1d30600ba3eeb201f764aad2dad72748643e4a285e1d1f7" then 
+            report "    [PASS] Test 4 OK" severity note;
+        else 
+            report "    [FAIL] Test 4 (64 Bytes 0xFF)." severity error;
+            report "    Got: " & to_hex_string(hash);
+        end if;
+
+        wait for clk_period * 10;
+        reset <= '1'; wait for clk_period; reset <= '0';
+
+------------------------------------------------------------
+        -- TEST 5: Mensajes Back-to-Back ("abc" -> "vacío")
+        ------------------------------------------------------------
+        report "--> TEST 5: Back-to-Back (Sin bajar enable)" severity note;
+        wait until rising_edge(clk); enable <= '1';
+        
+        -- Mensaje 1: "abc"
+        send_block(x"61626380" & x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018", true, true);
+        
+        -- No bajamos enable, esperamos que termine el primer hash
+        wait until done = '1';
+        wait for 1 ns;
+        
+        if hash = EXP_ABC then report "    [PASS] Test 5a OK (Hash 'abc')" severity note;
+        else report "    [FAIL] Test 5a." severity error; end if;
+
+        -- Inmediatamente inyectamos Mensaje 2 (Vacío) en el siguiente ciclo
+        wait until rising_edge(clk);
+        send_block(x"80000000" & x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", true, true);
+        
+        enable <= '0';
+        wait until done = '1';
+        wait for clk_period;
+        
+        if hash = EXP_EMPTY then report "    [PASS] Test 5b OK (Hash Vacio)" severity note;
+        else report "    [FAIL] Test 5b." severity error; end if;
+        
+        wait for clk_period * 10;
+        reset <= '1'; wait for clk_period; reset <= '0';
+
+        ------------------------------------------------------------
+        -- TEST 6: Mensaje Masivo (200 bytes 'a') - 4 Bloques
+        ------------------------------------------------------------
+        report "--> TEST 6: Mensaje Masivo 200 Bytes (4 Bloques)" severity note;
+        wait until rising_edge(clk); enable <= '1';
+        
+        -- Bloques 1, 2 y 3: Datos puros (64 bytes cada uno = 192 bytes totales)
+        for b in 1 to 3 loop
+            send_block(
+                x"6161616161616161616161616161616161616161616161616161616161616161" & 
+                x"6161616161616161616161616161616161616161616161616161616161616161",  
+                false, (b=1) 
+            );
+        end loop;
+        
+        -- Bloque 4: Últimos 8 bytes de 'a' + Padding + Longitud (1600 bits = 0x0640)
+        send_block(
+            x"6161616161616161800000000000000000000000000000000000000000000000" & 
+            x"0000000000000000000000000000000000000000000000000000000000000640",  
+            true, false 
+        );
+ 
+        enable <= '0';
+        wait until done = '1';
+        wait for clk_period;
+
+        -- Hash esperado de 200 caracteres 'a'
+        if hash = x"c2a908d98f5df987ade41b5fce213067efbcc21ef2240212a41e54b5e7c28ae5" then 
+            report "    [PASS] Test 6 OK" severity note;
+        else 
+            report "    [FAIL] Test 6 (200 Bytes)." severity error;
+            report "    Got: " & to_hex_string(hash);
+        end if;
+        
         report "========================================================";
         report " FIN DE STRESS TEST";
         report "========================================================";
