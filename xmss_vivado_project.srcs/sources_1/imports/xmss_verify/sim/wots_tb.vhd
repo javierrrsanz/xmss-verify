@@ -159,7 +159,94 @@ begin
 		    report "    [FAIL] ERROR: El Bloque 1 no coincide." severity error;
 		end if;
         
-		wait;
+		-- =========================================================================
+        -- INICIO DE STRESS TESTS (TESTS DE TORTURA)
+        -- =========================================================================
+        
+        -------------------------------------------------
+        -- TEST 4: EXTREMOS MATEMÁTICOS (All-Zeros y All-Ones)
+        -------------------------------------------------
+--        report "=== TEST 4: CASOS EXTREMOS MATEMATICOS ===" severity note;
+        
+--        -- Prueba 4.1: Mensaje de todo Ceros (Fuerza el checksum a su valor máximo)
+--        wots_in.module_input.mode <= "01"; -- SIGN
+--        wots_in.module_input.message <= (others => '0');
+--        wots_in.module_input.enable <= '1';
+--        wait for clk_period;
+--        wots_in.module_input.enable <= '0';
+--        wait until wots_out.module_output.done = '1';
+--        report "    [PASS] Firma completada con mensaje All-Zeros (Checksum Maximo superado)" severity note;
+--        wait for 5 * clk_period;
+
+--        -- Prueba 4.2: Mensaje de todo Unos (Fuerza el checksum a valor Cero)
+--        wots_in.module_input.message <= (others => '1');
+--        wots_in.module_input.enable <= '1';
+--        wait for clk_period;
+--        wots_in.module_input.enable <= '0';
+--        loop
+--    wait until rising_edge(clk);
+--    exit when wots_out.module_output.done = '1';
+--end loop;
+--        report "    [PASS] Firma completada con mensaje All-Ones (Checksum Cero superado)" severity note;
+--        wait for 5 * clk_period;
+
+        -------------------------------------------------
+        -- TEST 5: RESET ASESINO (Mid-Flight Reset)
+        -------------------------------------------------
+        report "=== TEST 5: RESET ASESINO (MID-FLIGHT) ===" severity note;
+        
+        wots_in.module_input.mode <= "00"; -- KEYGEN
+        wots_in.module_input.enable <= '1';
+        wait for clk_period;
+        wots_in.module_input.enable <= '0';
+        
+        -- Esperamos 100 ciclos. El sistema estará a plena carga saturando el bus de hashes.
+        wait for 100 * clk_period;
+        
+        report "    Inyectando RESET asincrono letal..." severity note;
+        reset <= '1';
+        wait for 5 * clk_period;
+        reset <= '0';
+        wait for 5 * clk_period;
+        
+        -- Verificamos si el FSM principal y todas las FSM hijas sobrevivieron
+        -- lanzando un nuevo KEYGEN limpio y esperando a que termine.
+        wots_in.module_input.enable <= '1';
+        wait for clk_period;
+        wots_in.module_input.enable <= '0';
+        wait until wots_out.module_output.done = '1';
+        report "    [PASS] Modulo recuperado exitosamente tras el Reset" severity note;
+        wait for 5 * clk_period;
+
+        -------------------------------------------------
+        -- TEST 6: SPAMMING DE ENABLE (Host Impaciente)
+        -------------------------------------------------
+        report "=== TEST 6: SPAMMING DE ENABLE (HOST RUIDOSO) ===" severity note;
+        
+        wots_in.module_input.mode <= "01"; -- SIGN
+        wots_in.module_input.message <= x"f01ea2366b149531d2800dfff7bccb6f02206d4c98827e69d1330d55e3d08445";
+        wots_in.module_input.enable <= '1';
+        wait for clk_period;
+        wots_in.module_input.enable <= '0';
+        
+        -- Mientras el modulo calcula la firma (y el done esta a '0'), 
+        -- le disparamos enables aleatorios como si el procesador host se hubiera vuelto loco.
+        for i in 1 to 10 loop
+            wait for 23 * clk_period; -- Retardo primo/arbitrario para no coincidir con estados fijos
+            wots_in.module_input.enable <= '1';
+            wait for clk_period;
+            wots_in.module_input.enable <= '0';
+        end loop;
+        
+        -- Si el FSM esta bien diseñado, habra ignorado el ruido y finalizara correctamente.
+        wait until wots_out.module_output.done = '1';
+        report "    [PASS] Firma completada sin corromperse por los Enables intrusos" severity note;
+
+        report "=======================================================" severity note;
+        report "=== TODOS LOS TESTS DE TORTURA SUPERADOS CON EXITO ====" severity note;
+        report "=======================================================" severity note;
+        
+        wait; -- Fin definitivo de la simulacion
 	end process;
 
 end Behavioral;

@@ -2,7 +2,7 @@
 -- Company: Ruhr-University Bochum / Chair for Security Engineering
 -- Engineer: Jan Philipp Thoma
 -- 
--- Modified: FLAWLESS 512-bit block formatter for standard SHA-256 (Deadlock Fixed)
+-- Modified: Perfect 512-bit block formatter (Multi-block support + Deadlock Free)
 ----------------------------------------------------------------------------------
 
 library IEEE;
@@ -35,7 +35,7 @@ architecture Behavioral of absorb_message is
         remaining_len : integer;
         len_appended : std_logic;
         hash_enable : std_logic;
-        shift_ctr : integer range 0 to 31; -- Rango ampliado para evitar error de simulador
+        shift_ctr : integer range 0 to 31; -- Ampliado para seguridad del simulador
     end record;
     
     type out_signals is record
@@ -45,6 +45,7 @@ architecture Behavioral of absorb_message is
     signal modules : out_signals;
     signal r, r_in : reg_type;
     
+    -- Señales combinacionales de Look-Ahead (Sincronización instantánea)
     signal next_message : std_logic_vector(31 downto 0);
     signal next_enable  : std_logic;
     signal next_last    : std_logic;
@@ -77,44 +78,33 @@ begin
                if d.enable = '1' then
                    v.total_len := d.len;
                    v.remaining_len := d.len;
-                   -- Cargamos la mitad superior (primeros 256 bits)
+                   -- Cargamos primeros 256 bits en la parte alta
                    v.block512(511 downto 256) := unsigned(d.input);
                    v.len_appended := '0';
                    v.shift_ctr := 0;
                    
                    if d.len > 256 then
-                       -- Pedimos los siguientes 256 bits para llenar el bloque
                        q.mnext <= '1';
                        v.state := S_FETCH_LOW;
                    else
-                       -- El mensaje cabe en la mitad superior, aplicamos padding directamente
+                       -- Padding directo para mensajes cortos
                        v.block512(255 downto 0) := (others => '0');
                        v.block512(511 - d.len) := '1';
-                       
-                       for i in 256 to 511 loop
-                           if i < 511 - d.len then
-                               v.block512(i) := '0';
-                           end if;
-                       end loop;
-                       
                        if d.len <= 447 then
                            v.block512(63 downto 0) := to_unsigned(d.len, 64);
                            v.len_appended := '1';
                        end if;
-                       
                        v.hash_enable := '1';
                        v.state := S_HASHING;
                    end if;
                end if;
                
            when S_FETCH_LOW =>
-               -- Cargamos la mitad inferior (siguientes 256 bits)
+               -- Cargamos segundos 256 bits para ensamblar el bloque de 512
                v.block512(255 downto 0) := unsigned(d.input);
                
                if r.remaining_len < 512 then
-                   -- Padding en la mitad inferior
                    v.block512(511 - r.remaining_len) := '1';
-                   
                    for i in 0 to 511 loop
                        if i < 511 - r.remaining_len then
                            v.block512(i) := '0';
@@ -131,7 +121,6 @@ begin
                v.state := S_HASHING;
                
            when S_HASHING =>
-               -- Alimentamos 16 palabras exactamente en 16 ciclos
                v.block512 := SHIFT_LEFT(r.block512, 32);
                v.shift_ctr := r.shift_ctr + 1;
                
@@ -141,19 +130,16 @@ begin
                end if;
                
            when S_WAIT_SHA_MNEXT =>
-               -- Sincronizamos con el núcleo SHA-256 (¡CORRECCIÓN DE DEADLOCK AQUÍ!)
+               -- Sincronización libre de deadlocks
                if r.len_appended = '1' then
-                   -- Si ya enviamos el último bloque (last=1), sha256 nunca assertará mnext,
-                   -- sino que assertará done al terminar sus rondas. Lo esperamos:
                    if modules.sha.done = '1' then
                        q.done <= '1';
                        v.state := S_IDLE;
                    end if;
                else
-                   -- Si no hemos terminado, sha256 nos pedirá el siguiente bloque con mnext:
                    if modules.sha.mnext = '1' then
                        if r.remaining_len <= 0 then
-                           -- Solo falta el bloque de Padding final (porque la longitud no cabía en el anterior)
+                           -- Construir el bloque final de padding
                            v.block512 := (others => '0');
                            if r.remaining_len = 0 then
                                v.block512(511) := '1';
@@ -164,7 +150,7 @@ begin
                            v.hash_enable := '1';
                            v.state := S_HASHING;
                        else
-                           -- Faltan más datos de WOTS
+                           -- Continuar pidiendo datos a WOTS
                            q.mnext <= '1';
                            v.state := S_LOAD_HIGH;
                        end if;
@@ -181,25 +167,17 @@ begin
                else
                    v.block512(255 downto 0) := (others => '0');
                    v.block512(511 - r.remaining_len) := '1';
-                   
-                   for i in 256 to 511 loop
-                       if i < 511 - r.remaining_len then
-                           v.block512(i) := '0';
-                       end if;
-                   end loop;
-                   
                    if r.remaining_len <= 447 then
                        v.block512(63 downto 0) := to_unsigned(r.total_len, 64);
                        v.len_appended := '1';
                    end if;
-                   
                    v.hash_enable := '1';
                    v.state := S_HASHING;
                end if;
 
        end case;
        
-       -- Sincronización Look-Ahead (Elimina retrasos de 1 ciclo)
+       -- Sincronización Look-Ahead sin retrasos de 1 ciclo
        next_message <= std_logic_vector(v.block512(511 downto 480));
        next_enable  <= v.hash_enable;
        next_last    <= v.len_appended;
