@@ -180,7 +180,7 @@ begin
        -- Sincronización Look-Ahead sin retrasos de 1 ciclo
        next_message <= std_logic_vector(v.block512(511 downto 480));
        next_enable  <= v.hash_enable;
-       next_last    <= v.len_appended;
+       next_last    <= r.len_appended;
        
        r_in <= v;
     end process;
