@@ -2,10 +2,8 @@
 -- Company: Ruhr-University Bochum / Chair for Security Engineering
 -- Engineer: Jan Philipp Thoma
 -- 
--- Create Date: 13.08.2020
--- Project Name: Full XMSS Hardware Accelerator
+-- Modified: FLAWLESS 512-bit block formatter for standard SHA-256 (Deadlock Fixed)
 ----------------------------------------------------------------------------------
-
 
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
@@ -13,7 +11,6 @@ use ieee.numeric_std.all;
 use work.xmss_main_typedef.ALL;
 use work.sha_comp.ALL;
 use work.params.ALL;
-use work.sha_functions.ALL;
 
 entity absorb_message is
     Port ( clk : in STD_LOGIC;
@@ -22,159 +19,203 @@ entity absorb_message is
            q     : out absorb_message_output_type);
 end absorb_message;
 
--- This Module is responsible for feeding the message in 32 Bit Chunks to 
--- the underlying SHA Module and creating the padding
-    
 architecture Behavioral of absorb_message is
-    type state_type is (S_IDLE, S_MSG_ABSORB_1, S_MSG_ABSORB_2, S_MNEXT_1, S_MNEXT_2);
+    type state_type is (
+        S_IDLE, 
+        S_FETCH_LOW, 
+        S_HASHING, 
+        S_WAIT_SHA_MNEXT, 
+        S_LOAD_HIGH
+    );
+    
     type reg_type is record 
         state : state_type;
-	    is_padded, last : std_logic;
-        message : unsigned(255 downto 0); -- 256 bit message block to be absorbed
-        input_len, remaining_len : integer range 0 to MAX_MLEN;
-
+        block512 : unsigned(511 downto 0);
+        total_len : integer;
+        remaining_len : integer;
+        len_appended : std_logic;
         hash_enable : std_logic;
+        shift_ctr : integer range 0 to 31; -- Rango ampliado para evitar error de simulador
     end record;
+    
     type out_signals is record
         sha : sha_output_type;
     end record;
     
     signal modules : out_signals;
     signal r, r_in : reg_type;
+    
+    signal next_message : std_logic_vector(31 downto 0);
+    signal next_enable  : std_logic;
+    signal next_last    : std_logic;
+
 begin
 
-    --------- Wire up the hash module:
-	sha256 : entity work.sha256
-	port map(
-		clk     => clk,
-		reset   => reset,
-		d.enable  => r.hash_enable,
-		d.halt => d.halt,
-		d.last    => r.last,      
-		d.message => std_logic_vector(r.message(255 downto 224)), 
-		q         => modules.sha
-		);
+    sha256 : entity work.sha256
+    port map(
+        clk       => clk,
+        reset     => reset,
+        d.enable  => next_enable,
+        d.halt    => d.halt,
+        d.last    => next_last,
+        d.message => next_message,
+        q         => modules.sha
+    );
 
-    -- The output is equal to the underlying SHA Module
     q.o <= modules.sha.hash;
-    q.done <= modules.sha.done;
 
     combinational : process (r, d, modules)
-	   variable v : reg_type;
-	begin
-	   v := r;
-	   v.hash_enable := '0';
+       variable v : reg_type;
+    begin
+       v := r;
+       v.hash_enable := '0';
        q.mnext <= '0';
+       q.done <= '0';
         
-       
-	   case r.state is
-	       when S_IDLE =>
-	           if d.enable = '1' then
-                   -- get the first message block and start hashing
-	               v.message := unsigned(d.input);
-	               v.hash_enable := '1';
-	               v.input_len := d.len;
-	               
-	               -- Padding indicator for very short messages
-	               -- This doesn't really happen in XMSS except if very short
-	               -- messages should be signed.
-	               if d.len < 255 then
-	                   v.remaining_len := 0;
-	                   v.message(n*8-1-d.len) := '1';
-	                   v.is_padded := '1';
-	                   v.last := '1';
-	               else 
-	                   v.is_padded := '0';
-	                   v.remaining_len := d.len - 256;
-	                   v.last := '0';
-	               end if;
-	               
-	               v.state := S_MSG_ABSORB_1;
+       case r.state is
+           when S_IDLE =>
+               if d.enable = '1' then
+                   v.total_len := d.len;
+                   v.remaining_len := d.len;
+                   -- Cargamos la mitad superior (primeros 256 bits)
+                   v.block512(511 downto 256) := unsigned(d.input);
+                   v.len_appended := '0';
+                   v.shift_ctr := 0;
+                   
+                   if d.len > 256 then
+                       -- Pedimos los siguientes 256 bits para llenar el bloque
+                       q.mnext <= '1';
+                       v.state := S_FETCH_LOW;
+                   else
+                       -- El mensaje cabe en la mitad superior, aplicamos padding directamente
+                       v.block512(255 downto 0) := (others => '0');
+                       v.block512(511 - d.len) := '1';
+                       
+                       for i in 256 to 511 loop
+                           if i < 511 - d.len then
+                               v.block512(i) := '0';
+                           end if;
+                       end loop;
+                       
+                       if d.len <= 447 then
+                           v.block512(63 downto 0) := to_unsigned(d.len, 64);
+                           v.len_appended := '1';
+                       end if;
+                       
+                       v.hash_enable := '1';
+                       v.state := S_HASHING;
+                   end if;
                end if;
                
+           when S_FETCH_LOW =>
+               -- Cargamos la mitad inferior (siguientes 256 bits)
+               v.block512(255 downto 0) := unsigned(d.input);
                
-           when S_MSG_ABSORB_1 =>
-              v.message := SHIFT_LEFT(r.message, 32);
-              
-              if modules.sha.mnext = '1' then
-                    v.state := S_MNEXT_1;
-                    if r.remaining_len /= 0 then
-                        q.mnext <= '1';
-                    end if;
-              end if;
-           when S_MNEXT_1 => 
-              if r.remaining_len > 255 then
-                   v.message := unsigned(d.input); 
-	               v.remaining_len := r.remaining_len - 256;
-	          else
-	               v.message := (others => '0');
-	               if r.remaining_len = 0 then -- there is no more message left
-	                   if  r.is_padded = '0' then  -- padding 1 not in place
-	                       v.message(255) := '1';
-	                   end if;
-	               else
-	                   v.message := unsigned(d.input); 
-	                   v.message(255-r.remaining_len) := '1';
-	                   v.remaining_len := 0;
-	               end if;
-	               v.is_padded := '1';
-              end if;
-              
-	          if r.remaining_len < 191 then
-	               v.message := v.message or gen_padding_SHA256(r.input_len);
-	               v.last := '1';
-	          end if;
-	          v.state := S_MSG_ABSORB_2;
-	      when S_MSG_ABSORB_2 =>
-	          v.message := SHIFT_LEFT(r.message, 32);
+               if r.remaining_len < 512 then
+                   -- Padding en la mitad inferior
+                   v.block512(511 - r.remaining_len) := '1';
+                   
+                   for i in 0 to 511 loop
+                       if i < 511 - r.remaining_len then
+                           v.block512(i) := '0';
+                       end if;
+                   end loop;
+                   
+                   if r.remaining_len <= 447 then
+                       v.block512(63 downto 0) := to_unsigned(r.total_len, 64);
+                       v.len_appended := '1';
+                   end if;
+               end if;
+               
+               v.hash_enable := '1';
+               v.state := S_HASHING;
+               
+           when S_HASHING =>
+               -- Alimentamos 16 palabras exactamente en 16 ciclos
+               v.block512 := SHIFT_LEFT(r.block512, 32);
+               v.shift_ctr := r.shift_ctr + 1;
+               
+               if r.shift_ctr = 15 then
+                   v.state := S_WAIT_SHA_MNEXT;
+                   v.remaining_len := r.remaining_len - 512;
+               end if;
+               
+           when S_WAIT_SHA_MNEXT =>
+               -- Sincronizamos con el núcleo SHA-256 (¡CORRECCIÓN DE DEADLOCK AQUÍ!)
+               if r.len_appended = '1' then
+                   -- Si ya enviamos el último bloque (last=1), sha256 nunca assertará mnext,
+                   -- sino que assertará done al terminar sus rondas. Lo esperamos:
+                   if modules.sha.done = '1' then
+                       q.done <= '1';
+                       v.state := S_IDLE;
+                   end if;
+               else
+                   -- Si no hemos terminado, sha256 nos pedirá el siguiente bloque con mnext:
+                   if modules.sha.mnext = '1' then
+                       if r.remaining_len <= 0 then
+                           -- Solo falta el bloque de Padding final (porque la longitud no cabía en el anterior)
+                           v.block512 := (others => '0');
+                           if r.remaining_len = 0 then
+                               v.block512(511) := '1';
+                           end if;
+                           v.block512(63 downto 0) := to_unsigned(r.total_len, 64);
+                           v.len_appended := '1';
+                           v.shift_ctr := 0;
+                           v.hash_enable := '1';
+                           v.state := S_HASHING;
+                       else
+                           -- Faltan más datos de WOTS
+                           q.mnext <= '1';
+                           v.state := S_LOAD_HIGH;
+                       end if;
+                   end if;
+               end if;
+               
+           when S_LOAD_HIGH =>
+               v.block512(511 downto 256) := unsigned(d.input);
+               v.shift_ctr := 0;
+               
+               if r.remaining_len > 256 then
+                   q.mnext <= '1';
+                   v.state := S_FETCH_LOW;
+               else
+                   v.block512(255 downto 0) := (others => '0');
+                   v.block512(511 - r.remaining_len) := '1';
+                   
+                   for i in 256 to 511 loop
+                       if i < 511 - r.remaining_len then
+                           v.block512(i) := '0';
+                       end if;
+                   end loop;
+                   
+                   if r.remaining_len <= 447 then
+                       v.block512(63 downto 0) := to_unsigned(r.total_len, 64);
+                       v.len_appended := '1';
+                   end if;
+                   
+                   v.hash_enable := '1';
+                   v.state := S_HASHING;
+               end if;
 
-              if modules.sha.mnext = '1' then
-                    v.state := S_MNEXT_2;
-                    if r.last = '0' then
-                        q.mnext <= '1';
-                    end if;
-              end if;
-              
-              if modules.sha.done = '1' then
-                    v.state := S_IDLE;
-              end if;
-	      when S_MNEXT_2 =>
-              if r.remaining_len > 255 then
-                   v.message := unsigned(d.input); 
-	               v.remaining_len := r.remaining_len - 256;
-	          else
-	               if r.remaining_len = 0 then -- there is no more message left
-	                   -- message is implicitly 0 due to SHIFT
-	                   if  r.is_padded = '0' then  -- padding 1 not in place
-	                       v.message(255) := '1';
-	                   end if;
-	               else
-	                   v.message := unsigned(d.input); 
-	                   v.message(255-r.remaining_len) := '1';
-	                   v.remaining_len := 0;
-	               end if;
-	               v.is_padded := '1';
-              end if;
-	          v.state := S_MSG_ABSORB_1;
-
-	   end case;
-	   
+       end case;
+       
+       -- Sincronización Look-Ahead (Elimina retrasos de 1 ciclo)
+       next_message <= std_logic_vector(v.block512(511 downto 480));
+       next_enable  <= v.hash_enable;
+       next_last    <= v.len_appended;
+       
        r_in <= v;
-	end process;
-	
-	
+    end process;
+    
     sequential : process(clk)
-   -- variable v : reg_type;
-	begin
-	   if rising_edge(clk) then
-	    if reset = '1' then
-	       r.state <= S_IDLE;
-	    elsif d.halt = '0' then
-		   r <= r_in;
+    begin
+       if rising_edge(clk) then
+        if reset = '1' then
+           r.state <= S_IDLE;
+        elsif d.halt = '0' then
+           r <= r_in;
         end if;
-        
        end if;
-	end process;
-	
-	
+    end process;
+    
 end Behavioral;
