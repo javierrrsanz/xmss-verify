@@ -2,7 +2,7 @@
 -- Company: Ruhr-University Bochum / Chair for Security Engineering
 -- Engineer: Jan Philipp Thoma
 -- 
--- Modified: Perfect 512-bit block formatter (Multi-block support + Deadlock Free)
+-- Modified: Perfect 512-bit block formatter (Multi-block support + Deadlock Free + Padding Sync Fix)
 ----------------------------------------------------------------------------------
 
 library IEEE;
@@ -22,9 +22,14 @@ end absorb_message;
 architecture Behavioral of absorb_message is
     type state_type is (
         S_IDLE, 
+        S_WAIT_FETCH_LOW_1, 
+        S_WAIT_FETCH_LOW_2, 
         S_FETCH_LOW, 
+        S_HOLD_PADDING,     -- NUEVO ESTADO: Freno de mano de 1 ciclo para sincronizar el bloque de padding
         S_HASHING, 
         S_WAIT_SHA_MNEXT, 
+        S_WAIT_LOAD_HIGH_1, 
+        S_WAIT_LOAD_HIGH_2, 
         S_LOAD_HIGH
     );
     
@@ -35,9 +40,9 @@ architecture Behavioral of absorb_message is
         remaining_len : integer;
         len_appended : std_logic;
         hash_enable : std_logic;
-        shift_ctr : integer range 0 to 31; -- Ampliado para seguridad del simulador
+        shift_ctr : integer range 0 to 31;
     end record;
-    
+
     type out_signals is record
         sha : sha_output_type;
     end record;
@@ -45,7 +50,6 @@ architecture Behavioral of absorb_message is
     signal modules : out_signals;
     signal r, r_in : reg_type;
     
-    -- Señales combinacionales de Look-Ahead (Sincronización instantánea)
     signal next_message : std_logic_vector(31 downto 0);
     signal next_enable  : std_logic;
     signal next_last    : std_logic;
@@ -72,22 +76,20 @@ begin
        v.hash_enable := '0';
        q.mnext <= '0';
        q.done <= '0';
-        
+
        case r.state is
            when S_IDLE =>
                if d.enable = '1' then
                    v.total_len := d.len;
                    v.remaining_len := d.len;
-                   -- Cargamos primeros 256 bits en la parte alta
                    v.block512(511 downto 256) := unsigned(d.input);
                    v.len_appended := '0';
                    v.shift_ctr := 0;
                    
                    if d.len > 256 then
                        q.mnext <= '1';
-                       v.state := S_FETCH_LOW;
+                       v.state := S_WAIT_FETCH_LOW_1;
                    else
-                       -- Padding directo para mensajes cortos
                        v.block512(255 downto 0) := (others => '0');
                        v.block512(511 - d.len) := '1';
                        if d.len <= 447 then
@@ -99,10 +101,14 @@ begin
                    end if;
                end if;
                
-           when S_FETCH_LOW =>
-               -- Cargamos segundos 256 bits para ensamblar el bloque de 512
-               v.block512(255 downto 0) := unsigned(d.input);
+           when S_WAIT_FETCH_LOW_1 =>
+               v.state := S_WAIT_FETCH_LOW_2;
                
+           when S_WAIT_FETCH_LOW_2 =>
+               v.state := S_FETCH_LOW;
+               
+           when S_FETCH_LOW =>
+               v.block512(255 downto 0) := unsigned(d.input);
                if r.remaining_len < 512 then
                    v.block512(511 - r.remaining_len) := '1';
                    for i in 0 to 511 loop
@@ -119,7 +125,12 @@ begin
                
                v.hash_enable := '1';
                v.state := S_HASHING;
-               
+
+           when S_HOLD_PADDING =>
+               -- Solo mantenemos el dato 1 ciclo sin hacer shift
+               v.hash_enable := '1';
+               v.state := S_HASHING;
+
            when S_HASHING =>
                v.block512 := SHIFT_LEFT(r.block512, 32);
                v.shift_ctr := r.shift_ctr + 1;
@@ -130,7 +141,6 @@ begin
                end if;
                
            when S_WAIT_SHA_MNEXT =>
-               -- Sincronización libre de deadlocks
                if r.len_appended = '1' then
                    if modules.sha.done = '1' then
                        q.done <= '1';
@@ -139,7 +149,7 @@ begin
                else
                    if modules.sha.mnext = '1' then
                        if r.remaining_len <= 0 then
-                           -- Construir el bloque final de padding
+                           -- Generamos el bloque de relleno internamente
                            v.block512 := (others => '0');
                            if r.remaining_len = 0 then
                                v.block512(511) := '1';
@@ -148,14 +158,21 @@ begin
                            v.len_appended := '1';
                            v.shift_ctr := 0;
                            v.hash_enable := '1';
-                           v.state := S_HASHING;
+                           -- En lugar de ir a S_HASHING (que desplaza de inmediato), 
+                           -- vamos al estado de espera para alinearnos con SHA256.
+                           v.state := S_HOLD_PADDING;
                        else
-                           -- Continuar pidiendo datos a WOTS
                            q.mnext <= '1';
-                           v.state := S_LOAD_HIGH;
+                           v.state := S_WAIT_LOAD_HIGH_1;
                        end if;
                    end if;
                end if;
+               
+           when S_WAIT_LOAD_HIGH_1 =>
+               v.state := S_WAIT_LOAD_HIGH_2;
+               
+           when S_WAIT_LOAD_HIGH_2 =>
+               v.state := S_LOAD_HIGH;
                
            when S_LOAD_HIGH =>
                v.block512(511 downto 256) := unsigned(d.input);
@@ -163,7 +180,7 @@ begin
                
                if r.remaining_len > 256 then
                    q.mnext <= '1';
-                   v.state := S_FETCH_LOW;
+                   v.state := S_WAIT_FETCH_LOW_1;
                else
                    v.block512(255 downto 0) := (others => '0');
                    v.block512(511 - r.remaining_len) := '1';
@@ -176,15 +193,14 @@ begin
                end if;
 
        end case;
-       
-       -- Sincronización Look-Ahead sin retrasos de 1 ciclo
+
        next_message <= std_logic_vector(v.block512(511 downto 480));
        next_enable  <= v.hash_enable;
        next_last    <= r.len_appended;
        
        r_in <= v;
     end process;
-    
+
     sequential : process(clk)
     begin
        if rising_edge(clk) then
