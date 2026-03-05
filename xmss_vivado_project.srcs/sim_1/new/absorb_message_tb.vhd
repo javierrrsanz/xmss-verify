@@ -10,17 +10,19 @@ end absorb_message_tb;
 
 architecture Behavioral of absorb_message_tb is
     constant clk_period : time := 10 ns;
-    
     signal clk, reset : std_logic := '0';
     signal d_in       : absorb_message_input_type;
     signal q_out      : absorb_message_output_type;
 
-    -- Vectores Esperados (NIST FIPS 180-4)
+    -- Vectores Esperados
     constant EXP_EMPTY : std_logic_vector(255 downto 0) := x"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     constant EXP_ABC   : std_logic_vector(255 downto 0) := x"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     constant EXP_512FF : std_logic_vector(255 downto 0) := x"8667e718294e9e0df1d30600ba3eeb201f764aad2dad72748643e4a285e1d1f7";
+    
+    -- ATENCION: Reemplaza estos vectores con los correctos obtenidos en Python si los necesitas verificar estrictamente
+    constant EXP_448AA : std_logic_vector(255 downto 0) := x"0000000000000000000000000000000000000000000000000000000000000000"; 
+    constant EXP_1024_MIX : std_logic_vector(255 downto 0) := x"0000000000000000000000000000000000000000000000000000000000000000";
 
-    -- Función auxiliar para imprimir el Hash en consola
     function to_hex_string(sv : std_logic_vector) return string is
         constant hex_chars : string(1 to 16) := "0123456789abcdef";
         variable result : string(1 to sv'length/4);
@@ -38,7 +40,6 @@ architecture Behavioral of absorb_message_tb is
 
 begin
 
-    -- Instancia del módulo a probar (Device Under Test)
     uut: entity work.absorb_message
         port map (
             clk   => clk,
@@ -47,7 +48,6 @@ begin
             q     => q_out
         );
 
-    -- Generador de Reloj
     clk_process : process
     begin
         clk <= '0';
@@ -56,10 +56,8 @@ begin
         wait for clk_period / 2;
     end process;
 
--- Proceso de Estímulos
     stim_proc: process
     begin
-        -- Inicialización segura
         d_in.enable <= '0';
         d_in.halt   <= '0';
         d_in.len    <= 0;
@@ -81,14 +79,19 @@ begin
         wait until rising_edge(clk);
         d_in.enable <= '1';
         d_in.len    <= 0; 
-        d_in.input  <= (others => '0'); 
+        d_in.input  <= (others => '0');
         wait for clk_period;
         d_in.enable <= '0';
         loop
             wait until rising_edge(clk);
             exit when q_out.done = '1';
         end loop;
-        report "    [HASH OBTENIDO]: " & to_hex_string(q_out.o) severity note;
+        
+        if q_out.o = EXP_EMPTY then
+            report "    [PASS] Test 1 OK. Hash: " & to_hex_string(q_out.o) severity note;
+        else
+            report "    [FAIL] Test 1 FAILED. Se esperaba: " & to_hex_string(EXP_EMPTY) & " | Obtenido: " & to_hex_string(q_out.o) severity error;
+        end if;
         wait for 10 * clk_period;
 
         -----------------------------------------------------------------
@@ -105,7 +108,12 @@ begin
             wait until rising_edge(clk);
             exit when q_out.done = '1';
         end loop;
-        report "    [HASH OBTENIDO]: " & to_hex_string(q_out.o) severity note;
+        
+        if q_out.o = EXP_ABC then
+            report "    [PASS] Test 2 OK. Hash: " & to_hex_string(q_out.o) severity note;
+        else
+            report "    [FAIL] Test 2 FAILED. Se esperaba: " & to_hex_string(EXP_ABC) & " | Obtenido: " & to_hex_string(q_out.o) severity error;
+        end if;
         wait for 10 * clk_period;
 
         -----------------------------------------------------------------
@@ -129,7 +137,12 @@ begin
             wait until rising_edge(clk);
             exit when q_out.done = '1';
         end loop;
-        report "    [HASH OBTENIDO]: " & to_hex_string(q_out.o) severity note;
+        
+        if q_out.o = EXP_512FF then
+            report "    [PASS] Test 3 OK. Hash: " & to_hex_string(q_out.o) severity note;
+        else
+            report "    [FAIL] Test 3 FAILED. Se esperaba: " & to_hex_string(EXP_512FF) & " | Obtenido: " & to_hex_string(q_out.o) severity error;
+        end if;
         wait for 10 * clk_period;
 
         -----------------------------------------------------------------
@@ -139,19 +152,16 @@ begin
         wait until rising_edge(clk);
         
         d_in.enable <= '1';
-        d_in.len    <= 448; 
-        -- Primeros 256 bits de 0xAA
+        d_in.len    <= 448;
         d_in.input  <= x"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; 
         wait for clk_period;
         d_in.enable <= '0';
 
-        -- Esperamos a que pida la segunda parte (que completan los 448)
         loop
             wait until rising_edge(clk);
             exit when q_out.mnext = '1';
         end loop;
         
-        -- Siguientes 192 bits de 0xAA, alineados a la izquierda. Los últimos 64 bits se ignorarán.
         d_in.input <= x"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0000000000000000";
         
         loop
@@ -159,8 +169,15 @@ begin
             exit when q_out.done = '1';
         end loop;
         
-        report "    [HASH OBTENIDO]: " & to_hex_string(q_out.o) severity note;
-        report "    [INFO] Si el simulador no se ha colgado en el Test 4, la maquina de estados de padding es robusta." severity note;
+        if EXP_448AA /= x"0000000000000000000000000000000000000000000000000000000000000000" then
+            if q_out.o = EXP_448AA then
+                report "    [PASS] Test 4 OK. Hash: " & to_hex_string(q_out.o) severity note;
+            else
+                report "    [FAIL] Test 4 FAILED. Se esperaba: " & to_hex_string(EXP_448AA) & " | Obtenido: " & to_hex_string(q_out.o) severity error;
+            end if;
+        else
+            report "    [INFO] Test 4 Completado (No validado). Hash: " & to_hex_string(q_out.o) severity note;
+        end if;
         wait for 10 * clk_period;
 
         -----------------------------------------------------------------
@@ -175,27 +192,30 @@ begin
         wait for clk_period;
         d_in.enable <= '0';
 
-        -- Chunk 2
         loop wait until rising_edge(clk); exit when q_out.mnext = '1'; end loop;
         d_in.input <= x"2222222222222222222222222222222222222222222222222222222222222222";
-        
-        -- Chunk 3
+
         loop wait until rising_edge(clk); exit when q_out.mnext = '1'; end loop;
         d_in.input <= x"3333333333333333333333333333333333333333333333333333333333333333";
 
-        -- Chunk 4
         loop wait until rising_edge(clk); exit when q_out.mnext = '1'; end loop;
         d_in.input <= x"4444444444444444444444444444444444444444444444444444444444444444";
 
-        -- Esperar a finalizar
         loop
             wait until rising_edge(clk);
             exit when q_out.done = '1';
         end loop;
         
-        report "    [HASH OBTENIDO]: " & to_hex_string(q_out.o) severity note;
-        report "    [INFO] Si el simulador llego aqui, absorb_message es a prueba de balas." severity note;
-        
+        if EXP_1024_MIX /= x"0000000000000000000000000000000000000000000000000000000000000000" then
+            if q_out.o = EXP_1024_MIX then
+                report "    [PASS] Test 5 OK. Hash: " & to_hex_string(q_out.o) severity note;
+            else
+                report "    [FAIL] Test 5 FAILED. Se esperaba: " & to_hex_string(EXP_1024_MIX) & " | Obtenido: " & to_hex_string(q_out.o) severity error;
+            end if;
+        else
+            report "    [INFO] Test 5 Completado (No validado). Hash: " & to_hex_string(q_out.o) severity note;
+        end if;
+
         report "=======================================================" severity note;
         report " FIN DE LAS PRUEBAS DE TORTURA" severity note;
         report "=======================================================" severity note;

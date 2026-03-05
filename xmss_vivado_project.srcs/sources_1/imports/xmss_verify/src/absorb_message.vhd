@@ -1,10 +1,3 @@
-----------------------------------------------------------------------------------
--- Company: Ruhr-University Bochum / Chair for Security Engineering
--- Engineer: Jan Philipp Thoma
--- 
--- Modified: Perfect 512-bit block formatter (Multi-block support + Deadlock Free + Padding Sync Fix)
-----------------------------------------------------------------------------------
-
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use ieee.numeric_std.all;
@@ -25,14 +18,14 @@ architecture Behavioral of absorb_message is
         S_WAIT_FETCH_LOW_1, 
         S_WAIT_FETCH_LOW_2, 
         S_FETCH_LOW, 
-        S_HOLD_PADDING,     -- NUEVO ESTADO: Freno de mano de 1 ciclo para sincronizar el bloque de padding
+        S_HOLD_PADDING,
         S_HASHING, 
         S_WAIT_SHA_MNEXT, 
         S_WAIT_LOAD_HIGH_1, 
         S_WAIT_LOAD_HIGH_2, 
         S_LOAD_HIGH
     );
-    
+
     type reg_type is record 
         state : state_type;
         block512 : unsigned(511 downto 0);
@@ -46,22 +39,35 @@ architecture Behavioral of absorb_message is
     type out_signals is record
         sha : sha_output_type;
     end record;
-    
+
     signal modules : out_signals;
     signal r, r_in : reg_type;
     
     signal next_message : std_logic_vector(31 downto 0);
     signal next_enable  : std_logic;
     signal next_last    : std_logic;
+    
+    -- NUEVO: Señal para congelar el SHA256 mientras traemos datos
+    signal fetch_halt   : std_logic;
 
 begin
+
+    -- Lógica de congelación: activa cuando esperamos a la BRAM
+    fetch_halt <= '1' when (
+        r.state = S_WAIT_LOAD_HIGH_1 or 
+        r.state = S_WAIT_LOAD_HIGH_2 or 
+        r.state = S_WAIT_FETCH_LOW_1 or 
+        r.state = S_WAIT_FETCH_LOW_2 or 
+        (r.state = S_LOAD_HIGH and r.remaining_len > 256)
+    ) else '0';
 
     sha256 : entity work.sha256
     port map(
         clk       => clk,
         reset     => reset,
         d.enable  => next_enable,
-        d.halt    => d.halt,
+        -- NUEVO: Inyectamos el halt interno junto con el externo
+        d.halt    => d.halt or fetch_halt,
         d.last    => next_last,
         d.message => next_message,
         q         => modules.sha
@@ -85,7 +91,7 @@ begin
                    v.block512(511 downto 256) := unsigned(d.input);
                    v.len_appended := '0';
                    v.shift_ctr := 0;
-                   
+
                    if d.len > 256 then
                        q.mnext <= '1';
                        v.state := S_WAIT_FETCH_LOW_1;
@@ -100,15 +106,16 @@ begin
                        v.state := S_HASHING;
                    end if;
                end if;
-               
+
            when S_WAIT_FETCH_LOW_1 =>
                v.state := S_WAIT_FETCH_LOW_2;
-               
+
            when S_WAIT_FETCH_LOW_2 =>
                v.state := S_FETCH_LOW;
-               
+
            when S_FETCH_LOW =>
                v.block512(255 downto 0) := unsigned(d.input);
+
                if r.remaining_len < 512 then
                    v.block512(511 - r.remaining_len) := '1';
                    for i in 0 to 511 loop
@@ -127,7 +134,6 @@ begin
                v.state := S_HASHING;
 
            when S_HOLD_PADDING =>
-               -- Solo mantenemos el dato 1 ciclo sin hacer shift
                v.hash_enable := '1';
                v.state := S_HASHING;
 
@@ -149,7 +155,6 @@ begin
                else
                    if modules.sha.mnext = '1' then
                        if r.remaining_len <= 0 then
-                           -- Generamos el bloque de relleno internamente
                            v.block512 := (others => '0');
                            if r.remaining_len = 0 then
                                v.block512(511) := '1';
@@ -158,8 +163,6 @@ begin
                            v.len_appended := '1';
                            v.shift_ctr := 0;
                            v.hash_enable := '1';
-                           -- En lugar de ir a S_HASHING (que desplaza de inmediato), 
-                           -- vamos al estado de espera para alinearnos con SHA256.
                            v.state := S_HOLD_PADDING;
                        else
                            q.mnext <= '1';
@@ -170,10 +173,10 @@ begin
                
            when S_WAIT_LOAD_HIGH_1 =>
                v.state := S_WAIT_LOAD_HIGH_2;
-               
+
            when S_WAIT_LOAD_HIGH_2 =>
                v.state := S_LOAD_HIGH;
-               
+
            when S_LOAD_HIGH =>
                v.block512(511 downto 256) := unsigned(d.input);
                v.shift_ctr := 0;
