@@ -14,8 +14,10 @@ end hash_core_collection;
 architecture Behavioral of hash_core_collection is
     constant ALL_ONES : std_logic_vector(HASH_CORES-1 downto 0) := (others => '1');
     constant ALL_ZEROS : std_logic_vector(HASH_CORES-1 downto 0) := (others => '0');
+
     type hash_output_array is array (HASH_CORES-1 downto 0) of std_logic_vector(n*8-1 downto 0);
     type id_array is array (HASH_CORES-1 downto 0) of hash_id;
+
     type reg_type is record 
         done_queue, mnext : std_logic_vector(HASH_CORES-1 downto 0);
         ids : id_array;
@@ -26,6 +28,7 @@ architecture Behavioral of hash_core_collection is
     signal hash_outputs : hash_output_array;
     signal done, mnext, enable : std_logic_vector(HASH_CORES-1 downto 0);
     signal r, r_in : reg_type;
+
 begin
 
    HashCore: for I in 0 to HASH_CORES-1 generate
@@ -38,6 +41,7 @@ begin
       end generate SWITCH_SHA;
    end generate HashCore;
 
+   -- RESTAURADO A SU FORMA ORIGINAL (Síncrono para evitar bucles combinacionales)
    q.idle <= '1' when r.busy_indicator = ALL_ZEROS else '0';
    q.busy <= r.busy;
 
@@ -45,28 +49,29 @@ begin
 	   variable v : reg_type;
 	begin
 	   v := r;
+       
+       -- Defaults
 	   q.done <= '0';
-       -- FIX: Sustituir guiones '-' por '0' para que no se vean naranjas/rojas en la forma de onda
 	   q.o <= (others => '0');
-	   q.id <= (others => (others => '0'));
 	   q.done_id <= zero_hash_id;
 	   q.mnext <= '0';
-	   v.busy := '0';
 	   enable <= (others => '0');
+	   v.busy := '0';
 	   
 	   v.done_queue := r.done_queue or done;
-       
-       for k in 0 to HASH_CORES-1 loop
+
+       -- 1. Procesar peticiones mnext de los cores
+	   for k in 0 to HASH_CORES-1 loop
             if r.mnext(k) = '1' then
                 q.mnext <= '1';
                 v.mnext(k) := '0';
                 v.halt_indicator(k) := '0';
                 v.ids(k).block_ctr := r.ids(k).block_ctr + 1;
-                q.id <= v.ids(k);
             end if;
        end loop;
 
-       for k in 0 to HASH_CORES-1 loop
+       -- 2. Detectar nuevos mnext o halts para el próximo ciclo
+	   for k in 0 to HASH_CORES-1 loop
             if mnext(k) = '1' or r.halt_indicator(k) = '1' then
                 v.busy := '1';
                 v.mnext(k) := '1';
@@ -75,8 +80,9 @@ begin
        end loop;
        
        v.halt_indicator := (r.halt_indicator or mnext) xor v.mnext;
-       
-        for k in 0 to HASH_CORES-1 loop
+
+       -- 3. Liberar cores que han finalizado
+	   for k in 0 to HASH_CORES-1 loop
             if r.done_queue(k) = '1' then
                 q.done <= '1';
                 v.done_queue(k) := '0';
@@ -87,9 +93,10 @@ begin
             end if;
         end loop;
 
-       if d.enable = '1' then
+       -- 4. Asignar nuevo trabajo si hay peticiones
+	   if d.enable = '1' then
            for k in 0 to HASH_CORES-1 loop
-                if r.busy_indicator(k) = '0' then
+                if v.busy_indicator(k) = '0' then
                     enable(k) <= '1';
                     v.busy_indicator(k) := '1';
                     v.ids(k) := d.id;
@@ -99,9 +106,19 @@ begin
        end if;
 
        if v.busy_indicator = ALL_ONES then v.busy := '1'; end if;
+
+       -- EL VERDADERO FIX: Mantener el ID en el bus de forma estable todo el tiempo
+       q.id <= zero_hash_id;
+       for k in 0 to HASH_CORES-1 loop
+           if v.busy_indicator(k) = '1' then
+               q.id <= v.ids(k);
+               exit;
+           end if;
+       end loop;
+
        r_in <= v;
 	end process;
-   
+
    sequential : process(clk)
    begin
 	   if rising_edge(clk) then
@@ -110,6 +127,7 @@ begin
 	       r.done_queue <= (others => '0');
 	       r.mnext <= (others => '0');
 	       r.halt_indicator <= (others => '0');
+           r.busy <= '0';
 	    else
 		   r <= r_in;
         end if;
