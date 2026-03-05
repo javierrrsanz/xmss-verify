@@ -50,9 +50,7 @@ begin
     q.hash_message.index <= r.index;
     q.l_tree.address_4 <= std_logic_vector(resize(r.index, 32));
     
-    q.wots.mode <= "10"; 
     q.wots.message <= d.hash_message.mhash;
-    q.wots.seed <= (others => '-');
 	q.wots.address_4 <= std_logic_vector(resize(r.index, 32));
 
     combinational : process (r, d, modules_root_q)

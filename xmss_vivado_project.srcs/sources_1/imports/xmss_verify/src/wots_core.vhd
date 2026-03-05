@@ -19,24 +19,24 @@ architecture Behavioral of wots_core is
     type chain_output_array is array (HASH_CHAINS-1 downto 0) of std_logic_vector(n*8 -1 downto 0);
     type chain_hash_array is array (HASH_CHAINS-1 downto 0) of hash_subsystem_input_type;
     type chain_counter_array is array (HASH_CHAINS-1 downto 0) of unsigned(WOTS_LEN_LOG -1 downto 0);
-    type state_type is (S_IDLE, S_READ_SK_1, S_READ_SK_2, S_CHAIN_EN, S_SIG_CHECK, S_DONE_CHECK);
-    type bram_state_type is (B_READ_SK_I, B_WRITE_PK_I, B_WRITE_SIG_I);
     
+    type state_type is (S_IDLE, S_READ_SIG_1, S_READ_SIG_2, S_CHAIN_EN, S_DONE_CHECK);
+    type bram_state_type is (B_READ_SIG_I, B_WRITE_PK_I);
+
     type reg_type is record 
         state : state_type;
         ctr : integer range 0 to wots_len;
-        done_indicator, sig_indicator : std_logic_vector(HASH_CHAINS-1 downto 0);
+        done_indicator : std_logic_vector(HASH_CHAINS-1 downto 0);
         hash_sel : unsigned(HASH_CHAINS-1 downto 0);
     end record;
 
     signal bram_offset : unsigned(WOTS_LEN_LOG-1 downto 0);
     signal bram_state : bram_state_type;
-    signal chain_busy, chain_enable, chain_continue, chain_done, chain_sig_done : std_logic_vector(HASH_CHAINS-1 downto 0);
+    signal chain_busy, chain_enable, chain_continue, chain_done : std_logic_vector(HASH_CHAINS-1 downto 0);
     signal chain_counter : chain_counter_array;
     signal chain_hash_output : chain_hash_array;
     signal chain_idle : std_logic;
     signal chain_output : chain_output_array;
-    signal chain_sig_step : unsigned(wots_log_w downto 0);
     signal chain_start : unsigned(wots_log_w - 1 downto 0);
     signal hash_indicator : unsigned(HASH_CHAINS-1 downto 0);
     signal index : integer range 0 to HASH_CHAINS-1;
@@ -50,11 +50,22 @@ begin
       Chain : entity work.wots_chain 
         generic map(id => I+1)
         port map(
-            clk => clk, reset => reset, d.enable  => chain_enable(I), d.seed => d.pub_seed, d.X => d.bram.dout,
-            d.address_4 => d.address_4, d.chain_index => r.ctr, d.continue => chain_continue(I),
-            d.start => chain_start, d.signature_step => chain_sig_step, d.hash_available => hash_indicator(I),
-            d.hash => d.hash, q.hash => chain_hash_output(I), q.done => chain_done(I), q.done_inter => chain_sig_done(I),
-            q.result => chain_output(I), q.busy => chain_busy(I), q.ctr => chain_counter(I));
+            clk => clk, reset => reset, 
+            d.enable  => chain_enable(I), 
+            d.seed => d.pub_seed, 
+            d.X => d.bram.dout,
+            d.address_4 => d.address_4, 
+            d.chain_index => r.ctr, 
+            d.continue => chain_continue(I), -- ENVÍA LA SEÑAL DE DESCONGELADO
+            d.start => chain_start, 
+            d.hash_available => hash_indicator(I),
+            d.hash => d.hash, 
+            q.hash => chain_hash_output(I), 
+            q.done => chain_done(I),
+            q.result => chain_output(I), 
+            q.busy => chain_busy(I), 
+            q.ctr => chain_counter(I)
+        );
     end generate;
 
     hash_indicator <= r_in.hash_sel when d.hash.busy = '0' else (others => '0');
@@ -65,10 +76,10 @@ begin
 
     q.bram.din <= chain_output(index);
     q.bram.en <= '1';
-    chain_start    <=       msg_as_int when d.mode = "10" else (others => '0');
-    chain_sig_step <= '0' & msg_as_int when d.mode = "01" else to_unsigned(wots_w, wots_log_w + 1);
+    
+    chain_start <= msg_as_int; 
 
-    combinational : process (r, d, chain_hash_output, chain_sig_done, chain_done, chain_busy, chain_idle)
+    combinational : process (r, d, chain_hash_output, chain_done, chain_busy, chain_idle)
 	   variable v : reg_type;
     begin
 	    v := r;
@@ -77,15 +88,14 @@ begin
 	    q.done <= '0';
 	    chain_enable <= (others => '0');
 	    chain_continue <= (others => '0');
-	    bram_state <= B_READ_SK_I;
+	    bram_state <= B_READ_SIG_I;
 	    index <= 0;
 	    
 	    v.done_indicator := r.done_indicator or chain_done;
-	    v.sig_indicator := r.sig_indicator or chain_sig_done;
-	    
-	    if d.hash.mnext = '1' and r.state /= S_IDLE then
+
+        if d.hash.mnext = '1' and r.state /= S_IDLE then
 	       v.hash_sel := (others => '0');
-	       v.hash_sel(to_integer(d.hash.id.ctr-1)) := '1';
+           v.hash_sel(to_integer(d.hash.id.ctr-1)) := '1';
         else
             v.hash_sel := ROTATE_LEFT(r.hash_sel, 1);
         end if;
@@ -100,11 +110,11 @@ begin
      	     when S_IDLE =>
      	          if d.enable = '1' then
      	              v.ctr := 0;
-     	              v.state := S_READ_SK_1;
+                      v.state := S_READ_SIG_1;
      	          end if;
-     	     when S_READ_SK_1 => v.state := S_READ_SK_2;
-     	     when S_READ_SK_2 => v.state := S_CHAIN_EN;
-     	     when S_CHAIN_EN =>
+     	     when S_READ_SIG_1 => v.state := S_READ_SIG_2;
+     	     when S_READ_SIG_2 => v.state := S_CHAIN_EN;
+             when S_CHAIN_EN =>
      	          for k in 0 to HASH_CHAINS-1 loop
                      if chain_busy(k) = '0' then
                          chain_enable(k) <= '1';
@@ -112,54 +122,37 @@ begin
                          exit;
                      end if;
                   end loop;
-                  v.state := S_SIG_CHECK;
-     	     when S_SIG_CHECK =>
-     	          bram_state <= B_WRITE_SIG_I;
-                  for k in 0 to HASH_CHAINS-1 loop
-                     if r.sig_indicator(k) = '1' then
-                         index <= k;
-                         v.sig_indicator(k) := '0';
-                         if r.done_indicator(k) = '0' then
-                            chain_continue(k) <= '1';
-                         end if;
-                         q.bram.wen <= '1';
-                         exit;
-                     end if;
-                  end loop;
-     	          v.state := S_DONE_CHECK;
-     	     when S_DONE_CHECK =>
+                  v.state := S_DONE_CHECK;
+
+             when S_DONE_CHECK =>
      	          bram_state <= B_WRITE_PK_I;
                   for k in 0 to HASH_CHAINS-1 loop
                      if r.done_indicator(k) = '1' then
                          index <= k;
                          v.done_indicator(k) := '0';
-                         if r.sig_indicator(k) = '0' then
-                            chain_continue(k) <= '1';
-                         end if;
+                         chain_continue(k) <= '1'; -- DESCONGELAMOS LA CADENA AL ESCRIBIR
                          q.bram.wen <= '1';
                          exit;
                      end if;
                   end loop;
+                  
                   if chain_idle = '1' then
                         v.state := S_IDLE;
                         q.done <= '1';
                   elsif r.ctr = wots_len then
-                        v.state := S_SIG_CHECK;
+                        v.state := S_DONE_CHECK;
                   else
-     	                v.state := S_READ_SK_1;
+     	                v.state := S_READ_SIG_1;
                   end if;
         end case;
         r_in <= v;
     end process;
 
-    bram_mux : process(bram_state, d.mode, bram_offset, r.ctr)
+    bram_mux : process(bram_state, bram_offset, r.ctr)
     begin
         case bram_state is
-            when B_READ_SK_I => 
-                if d.mode = "10" then q.bram.addr <= std_logic_vector(to_unsigned(BRAM_XMSS_SIG_WOTS + r.ctr, BRAM_ADDR_SIZE));
-                else q.bram.addr <= std_logic_vector(to_unsigned(BRAM_WOTS_KEY + r.ctr, BRAM_ADDR_SIZE)); end if;
+            when B_READ_SIG_I => q.bram.addr <= std_logic_vector(to_unsigned(BRAM_XMSS_SIG_WOTS + r.ctr, BRAM_ADDR_SIZE));
             when B_WRITE_PK_I => q.bram.addr <= std_logic_vector(BRAM_WOTS_KEY + resize(bram_offset, BRAM_ADDR_SIZE));
-            when B_WRITE_SIG_I => q.bram.addr <= std_logic_vector(BRAM_XMSS_SIG_WOTS + resize(bram_offset, BRAM_ADDR_SIZE));
         end case;
     end process;
 
@@ -170,8 +163,6 @@ begin
 	       r.state <= S_IDLE;
 	       r.hash_sel <= (0 => '1', others => '0');
 	       r.done_indicator <= (others => '0');
-	       r.sig_indicator <= (others => '0');
-           -- FIX: Resetear ctr para evitar variables rojas
            r.ctr <= 0;
 	    else
 		   r <= r_in;

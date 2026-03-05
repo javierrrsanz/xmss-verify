@@ -150,26 +150,26 @@ begin
         reset <= '0';
         wait for 4 * clk_period;
 
-        -- ==========================================================
-        -- FASE 1: LLENAR LA BRAM CON CLAVES WOTS PERFECTAS
-        -- ==========================================================
-        report "=== [FASE 1] GENERANDO WOTS PUBLIC KEY EN BRAM ===" severity note;
-        active_module <= 0;
-        wots_in.module_input.mode <= "00";
-        wots_in.module_input.seed <= x"a344f01778bb4aca2d1406c8821017fbd029aa42803a835c362396778c678dfa";
-        wots_in.pub_seed <= PUB_SEED;
-        wots_in.module_input.address_4 <= x"00000000";
+--        -- ==========================================================
+--        -- FASE 1: LLENAR LA BRAM CON CLAVES WOTS PERFECTAS
+--        -- ==========================================================
+--        report "=== [FASE 1] GENERANDO WOTS PUBLIC KEY EN BRAM ===" severity note;
+--        active_module <= 0;
+--        wots_in.module_input.mode <= "00";
+--        wots_in.module_input.seed <= x"a344f01778bb4aca2d1406c8821017fbd029aa42803a835c362396778c678dfa";
+--        wots_in.pub_seed <= PUB_SEED;
+--        wots_in.module_input.address_4 <= x"00000000";
 
-        wots_in.module_input.enable <= '1';
-        wait for clk_period;
-        wots_in.module_input.enable <= '0';
+--        wots_in.module_input.enable <= '1';
+--        wait for clk_period;
+--        wots_in.module_input.enable <= '0';
 
-        loop
-            wait until rising_edge(clk);
-            exit when wots_out.module_output.done = '1';
-        end loop;
-        report "    [OK] WOTS PK Generada y guardada en memoria BRAM." severity note;
-        wait for 10 * clk_period;
+--        loop
+--            wait until rising_edge(clk);
+--            exit when wots_out.module_output.done = '1';
+--        end loop;
+--        report "    [OK] WOTS PK Generada y guardada en memoria BRAM." severity note;
+--        wait for 10 * clk_period;
 
         -- ==========================================================
         -- FASE 2: COMPRIMIR TODO CON L-TREE + THASH

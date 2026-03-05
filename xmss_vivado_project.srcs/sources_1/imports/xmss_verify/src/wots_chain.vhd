@@ -6,7 +6,7 @@ use work.params.ALL;
 
 entity wots_chain is
     Generic( ID : integer);
-Port ( clk : in STD_LOGIC;
+    Port ( clk : in STD_LOGIC;
            reset : in STD_LOGIC;
            d     : in wots_chain_input_type;
            q     : out wots_chain_output_type);
@@ -17,11 +17,10 @@ architecture Behavioral of wots_chain is
     type reg_type is record 
         state : state_type;
         cnt : unsigned(WOTS_LOG_W-1 downto 0);
-        signature_step : unsigned(WOTS_LOG_W downto 0); 
         chain_index : unsigned(WOTS_LEN_LOG-1 downto 0);
         X : std_logic_vector(n*8-1 downto 0); 
         key : std_logic_vector(n*8-1 downto 0);
-        halt_self : std_logic;   
+        halt_self : std_logic; -- RESTAURADO EL SEGURO
         key_and_mask : unsigned(1 downto 0);
         busy : std_logic; 
     end record;
@@ -29,8 +28,8 @@ architecture Behavioral of wots_chain is
     signal hash_sel : unsigned(2 downto 0);
     signal has_mnext, has_done, is_addressed : std_logic;
     signal r, r_in : reg_type;
+
 begin
-    
     q.busy <= r.busy;
     q.ctr <= r.chain_index;
     q.hash.len <= 768;
@@ -48,7 +47,6 @@ begin
        q.hash.enable <= '0';
        q.hash.id.block_ctr <= (others => '0');
        q.done <= '0';
-       q.done_inter <= '0';
        hash_sel <= d.hash.id.block_ctr;
 
        case r.state is      
@@ -57,23 +55,20 @@ begin
                if d.enable = '1' then
                    v.X := d.X;
                    v.cnt := d.start;
-                   v.signature_step := d.signature_step;
                    v.chain_index := to_unsigned(d.chain_index, WOTS_LEN_LOG);
                    v.busy := '1';
                    v.state := S_LOOP;
                end if;
+               
            when S_LOOP =>
-              if r.cnt = r.signature_step then
-                    q.done_inter <= '1';
-                    v.halt_self := '1';    
-              end if;
               if r.cnt = wots_w - 1 then
                     q.done <= '1';
                     v.state := S_IDLE; 
-                    v.halt_self := '1';    
+                    v.halt_self := '1'; -- CONGELA LOS DATOS HASTA QUE SE ESCRIBEN EN BRAM
               else 
                     v.state := S_KEY;
               end if;
+              
            when S_KEY =>
                 v.key_and_mask := "00";
                 if d.hash_available = '1' then
@@ -81,6 +76,7 @@ begin
                     hash_sel <= "000";
                     v.state := S_BITMASK;
                 end if;
+                
            when S_BITMASK =>
                 if d.hash_available = '1' then
                     q.hash.enable <= '1';
@@ -92,6 +88,7 @@ begin
                     v.key_and_mask(1) := '1';
                     v.key := d.hash.o;
                 end if;
+                
            when S_KEY_AND_MASK => 
                 if has_done = '1' then
                     if d.hash.done_id.block_ctr(2) = '0' then 
@@ -105,6 +102,7 @@ begin
                if v.key_and_mask = "11" then
                     v.state := S_CORE_HASH_INIT;
                end if;
+               
            when S_CORE_HASH_INIT =>
                 if d.hash_available = '1' then
                     q.hash.enable <= '1';
@@ -112,6 +110,7 @@ begin
                     hash_sel <= "111";
                     v.state := S_CORE_HASH;
                 end if;
+                
            when S_CORE_HASH =>
               if has_done = '1' then
                     v.cnt := r.cnt + 1;
@@ -145,7 +144,6 @@ begin
         if reset = '1' then
            r.state <= S_IDLE;
            r.halt_self <= '0';
-           -- FIX: Resetear valores para evitar lineas rojas ('U')
            r.busy <= '0';
            r.X <= (others => '0');
            r.chain_index <= (others => '0');
@@ -154,7 +152,7 @@ begin
            if r.halt_self = '0' then
               r <= r_in;
            elsif d.continue = '1' then
-              r.halt_self <= '0';
+              r.halt_self <= '0'; -- DESCONGELA LA CADENA
            end if;
         end if;
        end if;

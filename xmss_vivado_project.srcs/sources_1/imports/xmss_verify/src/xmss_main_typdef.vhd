@@ -77,13 +77,10 @@ package xmss_main_typedef is
     --- wots
     type wots_input_type_small is record
        enable  : std_logic;
-       seed    : std_logic_vector((n*8)-1 downto 0);
-       
-       mode    : std_logic_vector(1 downto 0);
        message : std_logic_vector((n*8)-1 downto 0);
        address_4 : std_logic_vector(31 downto 0);
     end record;
-    constant zero_wots_xmss_child_input : wots_input_type_small := ('0', (others => '-'), (others => '-'), (others => '-'), (others => '-'));
+    constant zero_wots_xmss_child_input : wots_input_type_small := ('0', (others => '-'), (others => '-'));
     
     type wots_input_type is record
        module_input : wots_input_type_small;
