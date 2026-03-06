@@ -31,7 +31,6 @@ package body wots_functions is
         variable result : base_w_array;
         variable sum : integer range 0 to wots_len1*(wots_w-1);
         variable sum_as_array : std_logic_vector(wots_len2*wots_log_w-1 downto 0);
-        --variable tmp : std_logic_vector(wots_log_w - 1 downto 0);
     begin
         sum := (wots_w-1) * wots_len1;
         msg_copy := msg;

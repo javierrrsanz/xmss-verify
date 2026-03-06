@@ -4,7 +4,7 @@ use IEEE.NUMERIC_STD.ALL;
 
 package params is
    
-   constant HASH_CORES : Integer := 1; 
+   constant HASH_CORES : Integer := 4; 
    constant HASH_CHAINS: Integer := 1;
    constant HASH_FUNCTION : STRING := "SHA"; 
 
@@ -39,8 +39,6 @@ package params is
    constant zero_hash_id : hash_id := (others => (others => '0'));
    constant dont_care_hash_id : hash_id := (others => (others => '-'));
 
-   -- Restaurado tipo heights
-   type heights is array (tree_height downto 0) of integer range 0 to tree_height;
 
    type bram_interface_in is record
        EN           :  STD_LOGIC;

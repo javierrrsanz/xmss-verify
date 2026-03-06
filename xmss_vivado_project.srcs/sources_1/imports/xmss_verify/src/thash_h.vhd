@@ -36,9 +36,7 @@ architecture Behavioral of thash_h is
     signal hash_enable : std_logic;
     signal r, r_in : reg_type;
     signal block_ctr : unsigned(2 downto 0);
-    
-    signal DEBUG_THASH_EN : std_logic;
-    signal DEBUG_THASH_DONE : std_logic;
+
 begin
     
     -- Static output wiring    
@@ -46,12 +44,11 @@ begin
 	m_out.done <= r.done;
 	
 	q.hash.id.block_ctr <= block_ctr;
-    DEBUG_THASH_EN <= m_in.enable;
     combinational : process (r, d)
 	   variable v : reg_type;
     begin
         v := r;
-        DEBUG_THASH_DONE <= '0';
+
         -- Default assignments
         q.hash.len <= 768;
         q.hash.enable <= '0';
@@ -132,7 +129,6 @@ begin
                   if d.hash.done = '1' then
                       v.key := d.hash.o;
                       v.done := '1';
-                      DEBUG_THASH_DONE <= '1';
                       v.state := S_IDLE;
                   end if;
     end case;

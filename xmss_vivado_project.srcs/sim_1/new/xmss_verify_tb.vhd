@@ -255,21 +255,13 @@ begin
         report "=== VERIFICACION FINALIZADA ===" severity note;
         
         if vrfy_out.valid = '1' then
-            report "    [PASS] !FIRMA VALIDA! LA RAIZ CALCULADA COINCIDE EXACTAMENTE CON EL ESTANDAR OFICIAL." severity note;
-            report "    >> ESTE HARDWARE ES MATEMATICAMENTE PERFECTO SEGUN EL IETF RFC 8391 <<" severity note;
+            report "    [PASS] FIRMA VALIDA. LAS RAICES SON IGUALES" severity note;
+            
         else
-            report "    [FAIL] RESULTADO DE LA FIRMA: VALID = 0 (Las raíces no coinciden)" severity error;
+            report "    [FAIL] RESULTADO DE LA FIRMA: VALID = 0 (Las raices no coinciden)" severity error;
         end if;
         report "===========================================================" severity note;
         wait;
-    end process;
-
-    process
-    begin
-        loop
-            wait for 100 ms;
-            report ">>> HEARTBEAT: Procesando 2.5KB de Firma Criptografica..." severity note;
-        end loop;
     end process;
 
 end Behavioral;
