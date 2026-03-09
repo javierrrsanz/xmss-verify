@@ -98,7 +98,16 @@ begin
                    else
                        v.block512(255 downto 0) := (others => '0');
                        v.block512(511 - d.len) := '1';
+                       
+                       -- FIX: Bucle para limpiar cualquier basura residual de la memoria
+                       for i in 256 to 511 loop
+                           if i < 511 - d.len then
+                               v.block512(i) := '0';
+                           end if;
+                       end loop;
+                       
                        if d.len <= 447 then
+                           -- La longitud total debe pasarse en bits, si d.len es total_len
                            v.block512(63 downto 0) := to_unsigned(d.len, 64);
                            v.len_appended := '1';
                        end if;
@@ -187,6 +196,14 @@ begin
                else
                    v.block512(255 downto 0) := (others => '0');
                    v.block512(511 - r.remaining_len) := '1';
+                   
+                   -- FIX: Bucle para limpiar cualquier basura residual de la memoria
+                   for i in 256 to 511 loop
+                       if i < 511 - r.remaining_len then
+                           v.block512(i) := '0';
+                       end if;
+                   end loop;
+                   
                    if r.remaining_len <= 447 then
                        v.block512(63 downto 0) := to_unsigned(r.total_len, 64);
                        v.len_appended := '1';
