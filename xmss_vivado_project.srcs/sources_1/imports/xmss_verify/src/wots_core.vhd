@@ -16,10 +16,11 @@ end wots_core;
 
 architecture Behavioral of wots_core is
     constant all_zeros : std_logic_vector(HASH_CHAINS-1 downto 0) := (others => '0');
+
     type chain_output_array is array (HASH_CHAINS-1 downto 0) of std_logic_vector(n*8 -1 downto 0);
     type chain_hash_array is array (HASH_CHAINS-1 downto 0) of hash_subsystem_input_type;
     type chain_counter_array is array (HASH_CHAINS-1 downto 0) of unsigned(WOTS_LEN_LOG -1 downto 0);
-    
+
     type state_type is (S_IDLE, S_READ_SIG_1, S_READ_SIG_2, S_CHAIN_EN, S_DONE_CHECK);
     type bram_state_type is (B_READ_SIG_I, B_WRITE_PK_I);
 
@@ -28,6 +29,7 @@ architecture Behavioral of wots_core is
         ctr : integer range 0 to wots_len;
         done_indicator : std_logic_vector(HASH_CHAINS-1 downto 0);
         hash_sel : unsigned(HASH_CHAINS-1 downto 0);
+        hold_timer : integer range 0 to 4; -- FIX: Cubre hasta el instante exacto de latcheo
     end record;
 
     signal bram_offset : unsigned(WOTS_LEN_LOG-1 downto 0);
@@ -37,8 +39,10 @@ architecture Behavioral of wots_core is
     signal chain_hash_output : chain_hash_array;
     signal chain_idle : std_logic;
     signal chain_output : chain_output_array;
+
     signal chain_start : unsigned(wots_log_w - 1 downto 0);
     signal hash_indicator : unsigned(HASH_CHAINS-1 downto 0);
+
     signal index : integer range 0 to HASH_CHAINS-1;
     signal msg_and_checksum : base_w_array;
     signal msg_as_int : unsigned(wots_log_w - 1 downto 0);
@@ -56,7 +60,7 @@ begin
             d.X => d.bram.dout,
             d.address_4 => d.address_4, 
             d.chain_index => r.ctr, 
-            d.continue => chain_continue(I), -- ENVÍA LA SEÑAL DE DESCONGELADO
+            d.continue => chain_continue(I), 
             d.start => chain_start, 
             d.hash_available => hash_indicator(I),
             d.hash => d.hash, 
@@ -69,6 +73,7 @@ begin
     end generate;
 
     hash_indicator <= r_in.hash_sel when d.hash.busy = '0' else (others => '0');
+
     chain_idle <= '1' when chain_busy = ALL_ZEROS else '0';
     msg_and_checksum <= base_w(d.message);
     msg_as_int <= unsigned(msg_and_checksum(wots_len-1-r.ctr)) when r.ctr /= wots_len else (others => '0');
@@ -76,7 +81,6 @@ begin
 
     q.bram.din <= chain_output(index);
     q.bram.en <= '1';
-    
     chain_start <= msg_as_int; 
 
     combinational : process (r, d, chain_hash_output, chain_done, chain_busy, chain_idle)
@@ -90,14 +94,22 @@ begin
 	    chain_continue <= (others => '0');
 	    bram_state <= B_READ_SIG_I;
 	    index <= 0;
-	    
-	    v.done_indicator := r.done_indicator or chain_done;
 
+        v.done_indicator := r.done_indicator or chain_done;
+
+        -- CONTROLADOR DEL MULTIPLEXOR: Blindaje de 4 ciclos exactos
         if d.hash.mnext = '1' and r.state /= S_IDLE then
 	       v.hash_sel := (others => '0');
-           v.hash_sel(to_integer(d.hash.id.ctr-1)) := '1';
+           if to_integer(d.hash.id.ctr) > 0 and to_integer(d.hash.id.ctr) <= HASH_CHAINS then
+               v.hash_sel(to_integer(d.hash.id.ctr) - 1) := '1';
+           end if;
+           v.hold_timer := 4; 
+        elsif r.hold_timer > 0 then
+           v.hold_timer := r.hold_timer - 1;
+        elsif r.state = S_IDLE then
+           v.hash_sel := (0 => '1', others => '0');
         else
-            v.hash_sel := ROTATE_LEFT(r.hash_sel, 1);
+           v.hash_sel := ROTATE_LEFT(r.hash_sel, 1);
         end if;
         
         for k in 0 to HASH_CHAINS-1 loop
@@ -130,7 +142,7 @@ begin
                      if r.done_indicator(k) = '1' then
                          index <= k;
                          v.done_indicator(k) := '0';
-                         chain_continue(k) <= '1'; -- DESCONGELAMOS LA CADENA AL ESCRIBIR
+                         chain_continue(k) <= '1';
                          q.bram.wen <= '1';
                          exit;
                      end if;
@@ -161,10 +173,11 @@ begin
 	   if rising_edge(clk) then
 	    if reset = '1' then
 	       r.state <= S_IDLE;
-	       r.hash_sel <= (0 => '1', others => '0');
+           r.hash_sel <= (0 => '1', others => '0');
 	       r.done_indicator <= (others => '0');
            r.ctr <= 0;
-	    else
+           r.hold_timer <= 0;
+        else
 		   r <= r_in;
         end if;
        end if;

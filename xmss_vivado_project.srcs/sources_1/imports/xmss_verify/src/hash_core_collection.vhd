@@ -17,12 +17,18 @@ architecture Behavioral of hash_core_collection is
 
     type hash_output_array is array (HASH_CORES-1 downto 0) of std_logic_vector(n*8-1 downto 0);
     type id_array is array (HASH_CORES-1 downto 0) of hash_id;
+    
+    -- Máquina de estados del árbitro (4 ciclos blindados para lectura)
+    type arbiter_state is (ARB_IDLE, ARB_HOLD_1, ARB_HOLD_2, ARB_HOLD_3, ARB_HOLD_4);
 
     type reg_type is record 
-        done_queue, mnext : std_logic_vector(HASH_CORES-1 downto 0);
+        done_queue : std_logic_vector(HASH_CORES-1 downto 0);
+        mnext_queue : std_logic_vector(HASH_CORES-1 downto 0);
         ids : id_array;
         busy_indicator, halt_indicator : std_logic_vector(HASH_CORES-1 downto 0);
         busy : std_logic;
+        arb_state : arbiter_state;
+        active_core : integer range 0 to HASH_CORES-1;
     end record;
     
     signal hash_outputs : hash_output_array;
@@ -36,53 +42,64 @@ begin
         SHA : entity work.absorb_message 
         port map(
             clk     => clk, reset => reset, d.enable  => enable(I),
-            d.len  => d.len, d.input => d.input, d.halt => r_in.halt_indicator(I),
+            -- FIX: Usamos el registro 'r' para no congelarlo prematuramente
+            d.len  => d.len, d.input => d.input, d.halt => r.halt_indicator(I),
             q.done  => done(I), q.mnext => mnext(I), q.o => hash_outputs(I));
       end generate SWITCH_SHA;
    end generate HashCore;
 
-   -- RESTAURADO A SU FORMA ORIGINAL (Síncrono para evitar bucles combinacionales)
    q.idle <= '1' when r.busy_indicator = ALL_ZEROS else '0';
    q.busy <= r.busy;
 
    combinational : process (r, d, done, mnext, hash_outputs)
-	   variable v : reg_type;
-	begin
-	   v := r;
+       variable v : reg_type;
+    begin
+       v := r;
        
-       -- Defaults
-	   q.done <= '0';
-	   q.o <= (others => '0');
-	   q.done_id <= zero_hash_id;
-	   q.mnext <= '0';
-	   enable <= (others => '0');
-	   v.busy := '0';
-	   
-	   v.done_queue := r.done_queue or done;
+       q.done <= '0';
+       q.o <= (others => '0');
+       q.done_id <= zero_hash_id;
+       q.mnext <= '0';
+       enable <= (others => '0');
+       v.busy := '0';
+       
+       v.done_queue := r.done_queue or done;
+       v.mnext_queue := r.mnext_queue or mnext;
 
-       -- 1. Procesar peticiones mnext de los cores
-	   for k in 0 to HASH_CORES-1 loop
-            if r.mnext(k) = '1' then
-                q.mnext <= '1';
-                v.mnext(k) := '0';
-                v.halt_indicator(k) := '0';
-                v.ids(k).block_ctr := r.ids(k).block_ctr + 1;
-            end if;
+       -- Mantenemos congelados a los cores que esperan turno
+       for k in 0 to HASH_CORES-1 loop
+           v.halt_indicator(k) := v.mnext_queue(k);
        end loop;
 
-       -- 2. Detectar nuevos mnext o halts para el próximo ciclo
-	   for k in 0 to HASH_CORES-1 loop
-            if mnext(k) = '1' or r.halt_indicator(k) = '1' then
-                v.busy := '1';
-                v.mnext(k) := '1';
-                exit;
-            end if;
-       end loop;
-       
-       v.halt_indicator := (r.halt_indicator or mnext) xor v.mnext;
+       -- ID estable para el bus
+       q.id <= r.ids(r.active_core);
 
-       -- 3. Liberar cores que han finalizado
-	   for k in 0 to HASH_CORES-1 loop
+       -- ÁRBITRO SERIALIZADOR
+       case r.arb_state is
+           when ARB_IDLE =>
+               for k in 0 to HASH_CORES-1 loop
+                   if r.mnext_queue(k) = '1' then
+                       v.active_core := k;
+                       q.mnext <= '1';
+                       q.id <= r.ids(k);
+                       
+                       v.mnext_queue(k) := '0';
+                       v.halt_indicator(k) := '0'; -- Lo descongelamos
+                       v.ids(k).block_ctr := r.ids(k).block_ctr + 1;
+                       
+                       v.arb_state := ARB_HOLD_1;
+                       exit;
+                   end if;
+               end loop;
+               
+           when ARB_HOLD_1 => v.arb_state := ARB_HOLD_2;
+           when ARB_HOLD_2 => v.arb_state := ARB_HOLD_3;
+           when ARB_HOLD_3 => v.arb_state := ARB_HOLD_4;
+           when ARB_HOLD_4 => v.arb_state := ARB_IDLE; -- Blindaje en el ciclo de lectura
+       end case;
+
+       -- Liberar cores
+       for k in 0 to HASH_CORES-1 loop
             if r.done_queue(k) = '1' then
                 q.done <= '1';
                 v.done_queue(k) := '0';
@@ -93,8 +110,8 @@ begin
             end if;
         end loop;
 
-       -- 4. Asignar nuevo trabajo si hay peticiones
-	   if d.enable = '1' then
+       -- Asignar trabajo
+       if d.enable = '1' then
            for k in 0 to HASH_CORES-1 loop
                 if v.busy_indicator(k) = '0' then
                     enable(k) <= '1';
@@ -107,30 +124,33 @@ begin
 
        if v.busy_indicator = ALL_ONES then v.busy := '1'; end if;
 
-       -- EL VERDADERO FIX: Mantener el ID en el bus de forma estable todo el tiempo
-       q.id <= zero_hash_id;
-       for k in 0 to HASH_CORES-1 loop
-           if v.busy_indicator(k) = '1' then
-               q.id <= v.ids(k);
-               exit;
-           end if;
-       end loop;
+       -- Fallback ID
+       if v.arb_state = ARB_IDLE and r.mnext_queue = ALL_ZEROS then
+           for k in 0 to HASH_CORES-1 loop
+               if v.busy_indicator(k) = '1' then
+                   q.id <= v.ids(k);
+                   exit;
+               end if;
+           end loop;
+       end if;
 
        r_in <= v;
-	end process;
+    end process;
 
    sequential : process(clk)
    begin
-	   if rising_edge(clk) then
-	    if reset = '1' then
-	       r.busy_indicator <= (others => '0');
-	       r.done_queue <= (others => '0');
-	       r.mnext <= (others => '0');
-	       r.halt_indicator <= (others => '0');
+       if rising_edge(clk) then
+        if reset = '1' then
+           r.busy_indicator <= (others => '0');
+           r.done_queue <= (others => '0');
+           r.mnext_queue <= (others => '0');
+           r.halt_indicator <= (others => '0');
            r.busy <= '0';
-	    else
-		   r <= r_in;
+           r.arb_state <= ARB_IDLE;
+           r.active_core <= 0;
+        else
+           r <= r_in;
         end if;
        end if;
-	end process;
+    end process;
 end Behavioral;

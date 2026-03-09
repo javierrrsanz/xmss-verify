@@ -5,7 +5,7 @@ use IEEE.NUMERIC_STD.ALL;
 package params is
    
    constant HASH_CORES : Integer := 4; 
-   constant HASH_CHAINS: Integer := 1;
+   constant HASH_CHAINS: Integer := 4;
    constant HASH_FUNCTION : STRING := "SHA"; 
 
    constant n               : Integer := 32;
