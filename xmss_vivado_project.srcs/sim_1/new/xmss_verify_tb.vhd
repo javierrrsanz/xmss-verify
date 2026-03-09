@@ -232,9 +232,10 @@ begin
     end process;
 
     -- Secuencia de Ejecución
+   -- Secuencia de Ejecución
     process
     begin
-        reset <= '1'; 
+        reset <= '1';
         wait for 50 ns; 
         wait until rising_edge(clk);
         reset <= '0'; 
@@ -245,22 +246,34 @@ begin
         report "===========================================================" severity note;
         
         wait until rising_edge(clk);
+        
+        -- NUEVO COMPORTAMIENTO TIPO "HOST": Mantenemos el enable ALTO
         tb_enable <= '1'; 
-        wait until rising_edge(clk);
-        tb_enable <= '0';
-
+        
+        -- Esperamos a que el acelerador termine su orquestación
         wait until vrfy_out.done = '1';
         
         report " " severity note;
         report "=== VERIFICACION FINALIZADA ===" severity note;
         
+        -- Leemos el resultado MIENTRAS el done está arriba
         if vrfy_out.valid = '1' then
             report "    [PASS] FIRMA VALIDA. LAS RAICES SON IGUALES" severity note;
-            
         else
             report "    [FAIL] RESULTADO DE LA FIRMA: VALID = 0 (Las raices no coinciden)" severity error;
         end if;
         report "===========================================================" severity note;
+        
+        -- El procesador ha leído el resultado y da acuse de recibo bajando el enable
+        wait for clk_period;
+        tb_enable <= '0';
+        
+        -- Comprobamos que el sistema obedece, limpia el valid y vuelve a reposo
+        wait for 4 * clk_period;
+        if vrfy_out.valid = '0' and vrfy_out.done = '0' then
+             report "    [INFO] Sistema reseteado y en reposo correctamente." severity note;
+        end if;
+        
         wait;
     end process;
 
