@@ -32,7 +32,6 @@ architecture Behavioral of absorb_message is
         total_len : integer;
         remaining_len : integer;
         len_appended : std_logic;
-        hash_enable : std_logic;
         shift_ctr : integer range 0 to 31;
     end record;
 
@@ -77,9 +76,10 @@ begin
 
     combinational : process (r, d, modules)
        variable v : reg_type;
+       variable v_hash_enable: std_logic;
     begin
        v := r;
-       v.hash_enable := '0';
+       v_hash_enable := '0';
        q.mnext <= '0';
        q.done <= '0';
 
@@ -111,7 +111,7 @@ begin
                            v.block512(63 downto 0) := to_unsigned(d.len, 64);
                            v.len_appended := '1';
                        end if;
-                       v.hash_enable := '1';
+                       v_hash_enable := '1';
                        v.state := S_HASHING;
                    end if;
                end if;
@@ -139,11 +139,11 @@ begin
                    end if;
                end if;
                
-               v.hash_enable := '1';
+               v_hash_enable := '1';
                v.state := S_HASHING;
 
            when S_HOLD_PADDING =>
-               v.hash_enable := '1';
+               v_hash_enable := '1';
                v.state := S_HASHING;
 
            when S_HASHING =>
@@ -171,7 +171,7 @@ begin
                            v.block512(63 downto 0) := to_unsigned(r.total_len, 64);
                            v.len_appended := '1';
                            v.shift_ctr := 0;
-                           v.hash_enable := '1';
+                           v_hash_enable := '1';
                            v.state := S_HOLD_PADDING;
                        else
                            q.mnext <= '1';
@@ -208,14 +208,14 @@ begin
                        v.block512(63 downto 0) := to_unsigned(r.total_len, 64);
                        v.len_appended := '1';
                    end if;
-                   v.hash_enable := '1';
+                   v_hash_enable := '1';
                    v.state := S_HASHING;
                end if;
 
        end case;
 
        next_message <= std_logic_vector(v.block512(511 downto 480));
-       next_enable  <= v.hash_enable;
+       next_enable  <= v_hash_enable;
        next_last    <= r.len_appended;
        
        r_in <= v;

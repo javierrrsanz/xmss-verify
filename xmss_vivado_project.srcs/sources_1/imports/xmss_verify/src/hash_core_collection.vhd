@@ -148,6 +148,7 @@ begin
            r.busy <= '0';
            r.arb_state <= ARB_IDLE;
            r.active_core <= 0;
+           r.ids <= (others => zero_hash_id);
         else
            r <= r_in;
         end if;

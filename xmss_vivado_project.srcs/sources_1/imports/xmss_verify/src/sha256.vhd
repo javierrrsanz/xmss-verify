@@ -48,7 +48,6 @@ begin
     Message_Schedule : entity work.sha256_m 
         port map(
             clk     => clk,
-            reset   => reset,
             d.ctr   => r.ctr,
             d.message => d.message,
             d.halt  => d.halt,
