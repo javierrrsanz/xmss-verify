@@ -14,7 +14,7 @@ end xmss_verify;
 
 architecture Behavioral of xmss_verify is    
     -- AÑADIDO: S_DONE al final de la lista
-    type state_type is (S_IDLE, S_HASH_MESSAGE, S_WOTS_VRFY, S_LTREE, S_COMP_ROOT, S_LOAD_DATA_1, S_LOAD_DATA_2, S_LOAD_DATA_3, S_DONE);
+    type state_type is (S_IDLE, S_HASH_MESSAGE, S_WOTS_VRFY, S_LTREE, S_COMP_ROOT, S_LOAD_DATA_1, S_LOAD_DATA_2, S_LOAD_DATA_3, S_LOAD_DATA_4, S_LOAD_DATA_5, S_DONE);
     type bram_type_b is (B_INDEX, B_PUB_SEED, B_ROOT);
     
     type reg_type is record
@@ -22,6 +22,7 @@ architecture Behavioral of xmss_verify is
         index : unsigned(tree_height-1 downto 0);
         bram_state_b : bram_type_b;
         is_valid : std_logic; -- AÑADIDO: Memoria de si la firma fue válida
+        pub_seed : std_logic_vector(n*8-1 downto 0);
     end record;
 
     signal compute_root : xmss_compute_root_input_type;
@@ -59,6 +60,7 @@ begin
 	   variable v : reg_type;   
 	begin
 	    v := r;
+	    q.pub_seed <= r.pub_seed;
 	    q.mode_select_l1 <= "00";
 	   	q.valid <= r.is_valid; -- CAMBIO: Muestra siempre lo que hay en el registro
 	   	q.done <= '0';
@@ -80,9 +82,18 @@ begin
 	           v.state := S_LOAD_DATA_3;
            when S_LOAD_DATA_3 =>
 	           v.index := unsigned(d.bram.b.dout(tree_height - 1 downto 0));
-               v.bram_state_b := B_PUB_SEED;
-	           v.state := S_HASH_MESSAGE;
+	           v.bram_state_b := B_PUB_SEED;
+	           v.state := S_LOAD_DATA_4;
 
+	       when S_LOAD_DATA_4 =>
+	           -- El registro de dirección se actualiza. Esperamos a la BRAM.
+	           v.state := S_LOAD_DATA_5;
+
+           when S_LOAD_DATA_5 =>
+               -- Ahora sí, el dato estable ha llegado desde la BRAM
+               v.pub_seed := d.bram.b.dout; 
+               v.state := S_HASH_MESSAGE;
+               
 	       when S_HASH_MESSAGE => 
 	           q.mode_select_l1 <= "10";
                q.hash_message.enable <= '1';
@@ -149,6 +160,7 @@ begin
            r.index <= (others => '0');
            r.bram_state_b <= B_INDEX;
            r.is_valid <= '0'; -- AÑADIDO: Limpieza del registro de validación
+           r.pub_seed <= (others => '0');
 	    else
 		   r <= r_in;
         end if;

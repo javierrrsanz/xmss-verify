@@ -175,6 +175,7 @@ package xmss_main_typedef is
        done     : std_logic;
        valid : std_logic;
        mode_select_l1 : unsigned(1 downto 0);
+       pub_seed : std_logic_vector(n*8-1 downto 0);
        wots : wots_input_type_small;
        l_tree : xmss_l_tree_input_type_small;
        thash : xmss_thash_h_input_type_small;
