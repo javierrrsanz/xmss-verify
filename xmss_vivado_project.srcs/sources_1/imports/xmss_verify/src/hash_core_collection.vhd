@@ -51,8 +51,12 @@ begin
    q.idle <= '1' when r.busy_indicator = ALL_ZEROS else '0';
    q.busy <= r.busy;
 
-   combinational : process (r, d, done, mnext, hash_outputs)
+combinational : process (r, d, done, mnext, hash_outputs)
        variable v : reg_type;
+       variable v_mnext_handled : boolean;
+       variable v_done_handled  : boolean;
+       variable v_core_assigned : boolean;
+       variable v_fallback_done : boolean;
     begin
        v := r;
        
@@ -73,51 +77,54 @@ begin
 
        -- ID estable para el bus
        q.id <= r.ids(r.active_core);
-
-       -- ÁRBITRO SERIALIZADOR
+       
+       -- ÁRBITRO SERIALIZADOR (Priority Encoder sin EXITS)
        case r.arb_state is
            when ARB_IDLE =>
+               v_mnext_handled := false;
                for k in 0 to HASH_CORES-1 loop
-                   if r.mnext_queue(k) = '1' then
+                   if r.mnext_queue(k) = '1' and not v_mnext_handled then
                        v.active_core := k;
                        q.mnext <= '1';
                        q.id <= r.ids(k);
                        
                        v.mnext_queue(k) := '0';
-                       v.halt_indicator(k) := '0'; -- Lo descongelamos
+                       v.halt_indicator(k) := '0';
                        v.ids(k).block_ctr := r.ids(k).block_ctr + 1;
-                       
                        v.arb_state := ARB_HOLD_1;
-                       exit;
+                       v_mnext_handled := true;
                    end if;
                end loop;
                
            when ARB_HOLD_1 => v.arb_state := ARB_HOLD_2;
            when ARB_HOLD_2 => v.arb_state := ARB_HOLD_3;
            when ARB_HOLD_3 => v.arb_state := ARB_HOLD_4;
-           when ARB_HOLD_4 => v.arb_state := ARB_IDLE; -- Blindaje en el ciclo de lectura
+           when ARB_HOLD_4 => v.arb_state := ARB_IDLE;
        end case;
 
-       -- Liberar cores
+       -- Liberar cores (Priority Encoder sin EXITS)
+       v_done_handled := false;
        for k in 0 to HASH_CORES-1 loop
-            if r.done_queue(k) = '1' then
+            -- ATENCIÓN: Se evalúa 'r' para mantener el ciclo de retardo de tu diseño original
+            if r.done_queue(k) = '1' and not v_done_handled then
                 q.done <= '1';
                 v.done_queue(k) := '0';
                 v.busy_indicator(k) := '0';
                 q.done_id <= r.ids(k);
                 q.o <= hash_outputs(k);
-                exit;
+                v_done_handled := true;
             end if;
         end loop;
 
-       -- Asignar trabajo
+       -- Asignar trabajo (Priority Encoder sin EXITS)
+       v_core_assigned := false;
        if d.enable = '1' then
            for k in 0 to HASH_CORES-1 loop
-                if v.busy_indicator(k) = '0' then
+                if v.busy_indicator(k) = '0' and not v_core_assigned then
                     enable(k) <= '1';
                     v.busy_indicator(k) := '1';
                     v.ids(k) := d.id;
-                    exit;
+                    v_core_assigned := true;
                 end if;
            end loop;
        end if;
@@ -125,18 +132,21 @@ begin
        if v.busy_indicator = ALL_ONES then v.busy := '1'; end if;
 
        -- Fallback ID
+       v_fallback_done := false;
        if v.arb_state = ARB_IDLE and r.mnext_queue = ALL_ZEROS then
            for k in 0 to HASH_CORES-1 loop
-               if v.busy_indicator(k) = '1' then
-                   q.id <= v.ids(k);
-                   exit;
+               -- CLAVE PARA ROMPER EL BUCLE FÍSICO: Evaluamos r.busy_indicator en lugar de v.
+               -- Así no reenviamos el ID en el mismo ciclo exacto en el que llega un nuevo d.enable
+               if v.busy_indicator(k) = '1' and r.busy_indicator(k) = '1' and not v_fallback_done then
+                   q.id <= r.ids(k);
+                   v_fallback_done := true;
                end if;
            end loop;
        end if;
 
        r_in <= v;
     end process;
-
+    
    sequential : process(clk)
    begin
        if rising_edge(clk) then

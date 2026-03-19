@@ -30,6 +30,8 @@ architecture Behavioral of wots_core is
         done_indicator : std_logic_vector(HASH_CHAINS-1 downto 0);
         hash_sel : unsigned(HASH_CHAINS-1 downto 0);
         hold_timer : integer range 0 to 4; -- FIX: Cubre hasta el instante exacto de latcheo
+        mnext_reg : std_logic;
+        id_ctr_reg : unsigned(ID_CTR_LEN-1 downto 0);
     end record;
 
     signal bram_offset : unsigned(WOTS_LEN_LOG-1 downto 0);
@@ -85,8 +87,13 @@ begin
 
     combinational : process (r, d, chain_hash_output, chain_done, chain_busy, chain_idle)
 	   variable v : reg_type;
-    begin
+	begin
 	    v := r;
+	    
+        -- 1. CARGA PIPELINE: Guardamos la entrada actual para el siguiente ciclo
+        v.mnext_reg := d.hash.mnext;
+        v.id_ctr_reg    := d.hash.id.ctr;
+
 	    q.hash <= ZERO_HASH_INPUT;
 	    q.bram.wen <= '0';
 	    q.done <= '0';
@@ -94,14 +101,13 @@ begin
 	    chain_continue <= (others => '0');
 	    bram_state <= B_READ_SIG_I;
 	    index <= 0;
+	    v.done_indicator := r.done_indicator or chain_done;
 
-        v.done_indicator := r.done_indicator or chain_done;
-
-        -- CONTROLADOR DEL MULTIPLEXOR: Blindaje de 4 ciclos exactos
-        if d.hash.mnext = '1' and r.state /= S_IDLE then
+        -- 2. CONTROLADOR DEL MULTIPLEXOR: Blindaje evaluando 'r' (el ciclo pasado)
+        if r.mnext_reg = '1' and r.state /= S_IDLE then
 	       v.hash_sel := (others => '0');
-           if to_integer(d.hash.id.ctr) > 0 and to_integer(d.hash.id.ctr) <= HASH_CHAINS then
-               v.hash_sel(to_integer(d.hash.id.ctr) - 1) := '1';
+           if to_integer(r.id_ctr_reg) > 0 and to_integer(r.id_ctr_reg) <= HASH_CHAINS then
+               v.hash_sel(to_integer(r.id_ctr_reg) - 1) := '1';
            end if;
            v.hold_timer := 4; 
         elsif r.hold_timer > 0 then
@@ -111,7 +117,8 @@ begin
         else
            v.hash_sel := ROTATE_LEFT(r.hash_sel, 1);
         end if;
-        
+
+        -- 3. MUX DE SALIDA: Usamos 'v' para mantener sincronización interna perfecta
         for k in 0 to HASH_CHAINS-1 loop
              if v.hash_sel(k) = '1' then
                  q.hash <= chain_hash_output(k);
@@ -135,7 +142,6 @@ begin
                      end if;
                   end loop;
                   v.state := S_DONE_CHECK;
-
              when S_DONE_CHECK =>
      	          bram_state <= B_WRITE_PK_I;
                   for k in 0 to HASH_CHAINS-1 loop
@@ -147,7 +153,6 @@ begin
                          exit;
                      end if;
                   end loop;
-                  
                   if chain_idle = '1' then
                         v.state := S_IDLE;
                         q.done <= '1';
@@ -177,6 +182,8 @@ begin
 	       r.done_indicator <= (others => '0');
            r.ctr <= 0;
            r.hold_timer <= 0;
+           r.mnext_reg <= '0';
+           r.id_ctr_reg <= (others => '0');
         else
 		   r <= r_in;
         end if;

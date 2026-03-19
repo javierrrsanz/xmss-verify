@@ -39,8 +39,6 @@ begin
     -- Static output wiring    
 	m_out.o <= r.key;
 	m_out.done <= r.done;
-	
-	q.hash.id.block_ctr <= block_ctr;
 
     combinational : process (r, d)
 	   variable v : reg_type;
@@ -51,12 +49,13 @@ begin
         q.hash.len <= 768;
         q.hash.enable <= '0';
         
-        block_ctr <= d.hash.id.block_ctr;
         q.hash.id.ctr <= to_unsigned(0, ID_CTR_LEN);
+        q.hash.id.block_ctr <= (others => '0');
+        
+        block_ctr <= d.hash.id.block_ctr;
         
         v.done := '0';
 
-        -- NUEVO: Recolector universal de resultados asíncronos.
         -- Si un núcleo termina en CUALQUIER momento de la fase de preparación, guardamos su dato y levantamos su bandera.
         if d.hash.done = '1' and (r.state = S_BITMASK_1 or r.state = S_BITMASK_2 or r.state = S_WAIT_FOR_HASH) then
             if d.hash.done_id.ctr = to_unsigned(0, ID_CTR_LEN) then
@@ -85,6 +84,7 @@ begin
                   
               when S_KEY =>
                   q.hash.enable <= '1';
+                  q.hash.id.block_ctr <= "000";
                   block_ctr <= "000";
                   v.state := S_BITMASK_1;
                   
@@ -92,6 +92,7 @@ begin
                   if d.hash.busy = '0' then
                         q.hash.enable <= '1';
                         q.hash.id.ctr <= to_unsigned(1, ID_CTR_LEN);
+                        q.hash.id.block_ctr <= "000";
                         block_ctr <= "000";
                         v.state := S_BITMASK_2;
                   end if;
@@ -101,12 +102,13 @@ begin
                   if d.hash.busy = '0' then
                         q.hash.enable <= '1';
                         q.hash.id.ctr <= to_unsigned(2, ID_CTR_LEN);
+                        q.hash.id.block_ctr <= "000";
                         block_ctr <= "000";
                         v.state := S_WAIT_FOR_HASH;
                   end if;
                   
               when S_WAIT_FOR_HASH =>
-                  -- NUEVO: Solo avanzamos cuando tenemos la certeza absoluta de que los 3 cálculos han terminado
+                  -- Solo avanzamos cuando sepamos de que los 3 cálculos han terminado
                   if v.key_done = '1' and v.m1_done = '1' and v.m2_done = '1' then
                         v.state := S_CORE_HASH_INIT;
                   end if;
@@ -115,6 +117,7 @@ begin
                     q.hash.enable <= '1';
                     q.hash.len <= 1024;
                     q.hash.id.ctr <= to_unsigned(3, ID_CTR_LEN);
+                    q.hash.id.block_ctr <= "100";
                     block_ctr <= "100";
                     v.state := S_CORE_HASH;
                     
