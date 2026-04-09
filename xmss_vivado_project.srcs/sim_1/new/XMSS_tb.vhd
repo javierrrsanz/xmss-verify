@@ -18,7 +18,7 @@ architecture Behavioral of XMSS_tb is
     signal enable      : std_logic := '0';
     signal mlen        : std_logic_vector(31 downto 0) := (others => '0');
     signal done        : std_logic;
-    signal valid       : std_logic;
+    signal valid       : std_logic_vector(15 downto 0);
 
     -- Señales BRAM Puerto A
     signal bram_en_a   : std_logic;
@@ -232,7 +232,7 @@ begin
         report "=== VERIFICACION FINALIZADA ===" severity note;
 
         -- Comprobación del resultado
-        if valid = '1' then
+        if valid = STATUS_VALID then
             report "    [PASS] FIRMA VALIDA. EL HARDWARE VERIFICO CORRECTAMENTE LA FIRMA." severity note;
         else
             report "    [FAIL] RESULTADO DE LA FIRMA: INVALIDA." severity error;
@@ -245,7 +245,7 @@ begin
 
         -- Comprobamos si la máquina de estados obedece y baja los flags
         wait for 4 * clk_period;
-        if valid = '0' and done = '0' then
+        if valid = STATUS_IDLE and done = '0' then
             report "    [INFO] Top Level reseteado y en reposo correctamente." severity note;
         else
             report "    [FAIL] El Top Level no limpio las senales despues de bajar enable." severity error;

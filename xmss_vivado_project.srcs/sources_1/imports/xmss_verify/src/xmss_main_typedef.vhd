@@ -173,7 +173,7 @@ package xmss_main_typedef is
 
     type xmss_verify_output_type is record
        done     : std_logic;
-       valid : std_logic;
+       valid    : std_logic_vector(15 downto 0); -- CAMBIADO A MULTIBIT
        mode_select_l1 : unsigned(1 downto 0);
        pub_seed : std_logic_vector(n*8-1 downto 0);
        wots : wots_input_type_small;

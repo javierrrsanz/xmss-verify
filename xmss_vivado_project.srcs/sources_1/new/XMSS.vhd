@@ -17,7 +17,7 @@ entity XMSS is
         
         -- Salidas de Estado
         done        : out std_logic;
-        valid       : out std_logic;
+        valid       : out std_logic_vector(15 downto 0); -- Antes: std_logic
 
         -- Interfaz Memoria BRAM - Puerto A
         bram_en_a   : out std_logic;

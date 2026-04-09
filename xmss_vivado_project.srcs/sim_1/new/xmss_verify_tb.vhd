@@ -257,7 +257,7 @@ begin
         report "=== VERIFICACION FINALIZADA ===" severity note;
         
         -- Leemos el resultado MIENTRAS el done está arriba
-        if vrfy_out.valid = '1' then
+        if vrfy_out.valid = STATUS_VALID then
             report "    [PASS] FIRMA VALIDA. LAS RAICES SON IGUALES" severity note;
         else
             report "    [FAIL] RESULTADO DE LA FIRMA: VALID = 0 (Las raices no coinciden)" severity error;
@@ -270,7 +270,7 @@ begin
         
         -- Comprobamos que el sistema obedece, limpia el valid y vuelve a reposo
         wait for 4 * clk_period;
-        if vrfy_out.valid = '0' and vrfy_out.done = '0' then
+        if vrfy_out.valid = STATUS_IDLE and vrfy_out.done = '0' then
              report "    [INFO] Sistema reseteado y en reposo correctamente." severity note;
         end if;
         
