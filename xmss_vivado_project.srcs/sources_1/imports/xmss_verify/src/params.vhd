@@ -27,7 +27,7 @@ package params is
    constant BRAM_XMSS_SIG       : integer := BRAM_XMSS_SIG_AUTH + tree_height;
    constant BRAM_MESSAGE        : integer := BRAM_XMSS_SIG + 4;
    
-   constant BRAM_ADDR_SIZE : integer := 11;
+   constant BRAM_ADDR_SIZE : integer := 8;
    constant MAX_MLEN : integer := 2048;
    
    -- NUEVO: Estados seguros para mitigación FI (Multibit)

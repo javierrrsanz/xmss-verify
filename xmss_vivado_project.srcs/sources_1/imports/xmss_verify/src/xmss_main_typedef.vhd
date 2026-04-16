@@ -17,7 +17,7 @@ package xmss_main_typedef is
     type hash_subsystem_input_type is record
 	    id : hash_id;
         enable: std_logic;
-        len   : natural;
+        len   : integer range 0 to MAX_MLEN;
         input : std_logic_vector((n*8)-1 downto 0);
     end record;
 
@@ -33,7 +33,7 @@ package xmss_main_typedef is
     type absorb_message_input_type is record
 	    halt  : std_logic;
         enable: std_logic;
-        len   : natural;
+        len   : integer range 0 to MAX_MLEN;
         input : std_logic_vector((n*8)-1 downto 0);
     end record;
 
@@ -163,7 +163,7 @@ package xmss_main_typedef is
    --- XMSS VERIFY (TOP LEVEL)
    type xmss_verify_input_type is record
        enable  : std_logic;
-       mlen : natural;
+       mlen : integer range 0 to MAX_MLEN;
        wots : wots_output_type_small;
        l_tree : xmss_l_tree_output_type_small;
        thash : xmss_thash_h_output_type_small;
