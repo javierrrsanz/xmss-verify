@@ -46,7 +46,6 @@ package sha_comp is
 	component sha256_m
         port (
            clk   : in std_logic;
-           reset : in std_logic;
            d     : in sha_m_input_type;
            q     : out sha_m_output_type);
 	end component;	

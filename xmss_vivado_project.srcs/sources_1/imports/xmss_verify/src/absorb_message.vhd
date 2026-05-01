@@ -32,7 +32,6 @@ architecture Behavioral of absorb_message is
         total_len : integer;
         remaining_len : integer;
         len_appended : std_logic;
-        hash_enable : std_logic;
         shift_ctr : integer range 0 to 31;
     end record;
 
@@ -77,9 +76,10 @@ begin
 
     combinational : process (r, d, modules)
        variable v : reg_type;
+       variable v_hash_enable: std_logic;
     begin
        v := r;
-       v.hash_enable := '0';
+       v_hash_enable := '0';
        q.mnext <= '0';
        q.done <= '0';
 
@@ -98,11 +98,20 @@ begin
                    else
                        v.block512(255 downto 0) := (others => '0');
                        v.block512(511 - d.len) := '1';
+                       
+                       -- FIX: Bucle para limpiar cualquier basura residual de la memoria
+                       for i in 256 to 511 loop
+                           if i < 511 - d.len then
+                               v.block512(i) := '0';
+                           end if;
+                       end loop;
+                       
                        if d.len <= 447 then
+                           -- La longitud total debe pasarse en bits, si d.len es total_len
                            v.block512(63 downto 0) := to_unsigned(d.len, 64);
                            v.len_appended := '1';
                        end if;
-                       v.hash_enable := '1';
+                       v_hash_enable := '1';
                        v.state := S_HASHING;
                    end if;
                end if;
@@ -130,11 +139,11 @@ begin
                    end if;
                end if;
                
-               v.hash_enable := '1';
+               v_hash_enable := '1';
                v.state := S_HASHING;
 
            when S_HOLD_PADDING =>
-               v.hash_enable := '1';
+               v_hash_enable := '1';
                v.state := S_HASHING;
 
            when S_HASHING =>
@@ -162,7 +171,7 @@ begin
                            v.block512(63 downto 0) := to_unsigned(r.total_len, 64);
                            v.len_appended := '1';
                            v.shift_ctr := 0;
-                           v.hash_enable := '1';
+                           v_hash_enable := '1';
                            v.state := S_HOLD_PADDING;
                        else
                            q.mnext <= '1';
@@ -187,18 +196,26 @@ begin
                else
                    v.block512(255 downto 0) := (others => '0');
                    v.block512(511 - r.remaining_len) := '1';
+                   
+                   -- FIX: Bucle para limpiar cualquier basura residual de la memoria
+                   for i in 256 to 511 loop
+                       if i < 511 - r.remaining_len then
+                           v.block512(i) := '0';
+                       end if;
+                   end loop;
+                   
                    if r.remaining_len <= 447 then
                        v.block512(63 downto 0) := to_unsigned(r.total_len, 64);
                        v.len_appended := '1';
                    end if;
-                   v.hash_enable := '1';
+                   v_hash_enable := '1';
                    v.state := S_HASHING;
                end if;
 
        end case;
 
        next_message <= std_logic_vector(v.block512(511 downto 480));
-       next_enable  <= v.hash_enable;
+       next_enable  <= v_hash_enable;
        next_last    <= r.len_appended;
        
        r_in <= v;

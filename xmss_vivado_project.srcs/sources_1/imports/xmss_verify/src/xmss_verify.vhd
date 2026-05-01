@@ -13,13 +13,16 @@ entity xmss_verify is
 end xmss_verify;
 
 architecture Behavioral of xmss_verify is    
-    type state_type is (S_IDLE, S_HASH_MESSAGE, S_WOTS_VRFY, S_LTREE, S_COMP_ROOT, S_LOAD_DATA_1, S_LOAD_DATA_2, S_LOAD_DATA_3);
+    -- AÑADIDO: S_DONE al final de la lista
+    type state_type is (S_IDLE, S_HASH_MESSAGE, S_WOTS_VRFY, S_LTREE, S_COMP_ROOT, S_LOAD_DATA_1, S_LOAD_DATA_2, S_LOAD_DATA_3, S_LOAD_DATA_4, S_LOAD_DATA_5, S_DONE);
     type bram_type_b is (B_INDEX, B_PUB_SEED, B_ROOT);
     
     type reg_type is record
         state : state_type;
         index : unsigned(tree_height-1 downto 0);
         bram_state_b : bram_type_b;
+        is_valid : std_logic; -- AÑADIDO: Memoria de si la firma fue válida
+        pub_seed : std_logic_vector(n*8-1 downto 0);
     end record;
 
     signal compute_root : xmss_compute_root_input_type;
@@ -57,9 +60,9 @@ begin
 	   variable v : reg_type;   
 	begin
 	    v := r;
-	    
-	   	q.mode_select_l1 <= "00";
-	   	q.valid <= '0';
+	    q.pub_seed <= r.pub_seed;
+	    q.mode_select_l1 <= "00";
+	   	q.valid <= r.is_valid; -- CAMBIO: Muestra siempre lo que hay en el registro
 	   	q.done <= '0';
 	   	q.hash_message.enable <= '0';
 	   	q.l_tree.enable <= '0';
@@ -70,60 +73,78 @@ begin
 	       when S_IDLE =>
 	           if d.enable = '1' then
 	               v.bram_state_b := B_INDEX;
-	               v.state := S_LOAD_DATA_1;
+                   v.state := S_LOAD_DATA_1;
 	           end if;
 	           
 	       when S_LOAD_DATA_1 => 
 	           v.state := S_LOAD_DATA_2;
-
-	       when S_LOAD_DATA_2 =>
+           when S_LOAD_DATA_2 =>
 	           v.state := S_LOAD_DATA_3;
-
-	       when S_LOAD_DATA_3 =>
+           when S_LOAD_DATA_3 =>
 	           v.index := unsigned(d.bram.b.dout(tree_height - 1 downto 0));
 	           v.bram_state_b := B_PUB_SEED;
-	           v.state := S_HASH_MESSAGE;
+	           v.state := S_LOAD_DATA_4;
 
+	       when S_LOAD_DATA_4 =>
+	           -- El registro de dirección se actualiza. Esperamos a la BRAM.
+	           v.state := S_LOAD_DATA_5;
+
+           when S_LOAD_DATA_5 =>
+               -- Ahora sí, el dato estable ha llegado desde la BRAM
+               v.pub_seed := d.bram.b.dout; 
+               v.state := S_HASH_MESSAGE;
+               
 	       when S_HASH_MESSAGE => 
 	           q.mode_select_l1 <= "10";
-	           q.hash_message.enable <= '1';
+               q.hash_message.enable <= '1';
 	           if d.hash_message.done = '1' then	                   
 	               v.state := S_WOTS_VRFY;
-	           end if;
+               end if;
 
      	      when S_WOTS_VRFY =>
      	          q.mode_select_l1 <= "01";
-     	          q.wots.enable <= '1';
+                  q.wots.enable <= '1';
      	          if d.wots.done = '1' then
      	              v.state := S_LTREE;
-     	          end if;
+                  end if;
 
      	      when S_LTREE =>
      	          q.mode_select_l1 <= "11";
-     	          q.l_tree.enable <= '1';
+                  q.l_tree.enable <= '1';
      	          if d.l_tree.done = '1' then
-     	              v.bram_state_b := B_ROOT; 
-     	              v.state := S_COMP_ROOT;
+     	              v.bram_state_b := B_ROOT;
+                      v.state := S_COMP_ROOT;
      	          end if;
 
      	      when S_COMP_ROOT =>
      	          q.mode_select_l1 <= "00";
-     	          compute_root.enable <= '1';
+                  compute_root.enable <= '1';
      	          if modules_root_q.done = '1' then
-     	              q.done <= '1';
+                      -- Evaluamos la raíz y la guardamos en el registro
      	              if modules_root_q.root = d.bram.b.dout then 
-     	                  q.valid <= '1';
-     	              end if;
-     	              v.state := S_IDLE;
+     	                  v.is_valid := '1';
+                      else
+                          v.is_valid := '0';
+                      end if;
+     	              v.state := S_DONE; -- AÑADIDO: Transición al estado de retención
      	          end if;
+
+              -- AÑADIDO: ESTADO DE RETENCIÓN (HANDSHAKE)
+              when S_DONE =>
+                  q.done <= '1'; -- Mantenemos el aviso de terminado activo
+                  -- Esperamos a que el procesador dé acuse de recibo bajando el enable
+                  if d.enable = '0' then
+                      v.is_valid := '0'; -- Limpiamos el resultado
+                      v.state := S_IDLE; -- Volvemos a reposo
+                  end if;
+
 	    end case;
      	r_in <= v;
     end process;
 
     bram_mux_b : process(r.bram_state_b)
     begin
-        -- BLINDAJE CONTRA 'U' y 'X':
-        q.bram.b.addr <= (others => '0'); 
+        q.bram.b.addr <= (others => '0');
         case r.bram_state_b is
             when B_INDEX => q.bram.b.addr <= std_logic_vector(to_unsigned(BRAM_XMSS_SIG, BRAM_ADDR_SIZE));
             when B_PUB_SEED => q.bram.b.addr <= std_logic_vector(to_unsigned(BRAM_XMSS_SIG+2, BRAM_ADDR_SIZE));
@@ -136,9 +157,10 @@ begin
 	   if rising_edge(clk) then
 	    if reset = '1' then
 	       r.state <= S_IDLE;
-           -- EL FIX CRÍTICO: Inicializar todo a un valor seguro
            r.index <= (others => '0');
            r.bram_state_b <= B_INDEX;
+           r.is_valid <= '0'; -- AÑADIDO: Limpieza del registro de validación
+           r.pub_seed <= (others => '0');
 	    else
 		   r <= r_in;
         end if;

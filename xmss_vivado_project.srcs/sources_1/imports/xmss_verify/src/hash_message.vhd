@@ -20,7 +20,7 @@ architecture Behavioral of hash_message is
     
     type reg_type is record
         state : state_type;
-        ctr : integer range 0 to 1023;
+        ctr : natural;
         mhash : std_logic_vector(n*8-1 downto 0);
         block_count : integer range 0 to 4; 
     end record;

@@ -17,7 +17,6 @@ use IEEE.NUMERIC_STD.ALL;
 entity sha256_m is
     port(
         clk     : in  std_logic;
-        reset   : in  std_logic;
         d       : in  sha_m_input_type;
         q       : out sha_m_output_type);
 end sha256_m;
