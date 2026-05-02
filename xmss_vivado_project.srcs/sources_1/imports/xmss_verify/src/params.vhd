@@ -29,6 +29,11 @@ package params is
    
    constant BRAM_ADDR_SIZE : integer := 11;
    constant MAX_MLEN : integer := 2048;
+   
+    -- NUEVO: Estados seguros para mitigación FI (Multibit)
+   constant STATUS_VALID   : std_logic_vector(15 downto 0) := x"3C5A";
+   constant STATUS_INVALID : std_logic_vector(15 downto 0) := x"C3A5";
+   constant STATUS_IDLE    : std_logic_vector(15 downto 0) := x"0000";
 
    type hash_id is record
         block_ctr : unsigned(2 downto 0);

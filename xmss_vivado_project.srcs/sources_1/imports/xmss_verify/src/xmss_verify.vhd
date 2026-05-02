@@ -14,20 +14,30 @@ end xmss_verify;
 
 architecture Behavioral of xmss_verify is    
     -- AÑADIDO: S_DONE al final de la lista
-    type state_type is (S_IDLE, S_HASH_MESSAGE, S_WOTS_VRFY, S_LTREE, S_COMP_ROOT, S_LOAD_DATA_1, S_LOAD_DATA_2, S_LOAD_DATA_3, S_LOAD_DATA_4, S_LOAD_DATA_5, S_DONE);
+   -- AÑADIDO: Nuevos estados para verificación redundante
+    type state_type is (S_IDLE, S_HASH_MESSAGE, S_WOTS_VRFY, S_LTREE, S_COMP_ROOT, S_CHECK_1, S_WAIT_DELAY, S_CHECK_2, S_LOAD_DATA_1, S_LOAD_DATA_2, S_LOAD_DATA_3, S_LOAD_DATA_4, S_LOAD_DATA_5, S_DONE);
     type bram_type_b is (B_INDEX, B_PUB_SEED, B_ROOT);
     
     type reg_type is record
         state : state_type;
         index : unsigned(tree_height-1 downto 0);
         bram_state_b : bram_type_b;
-        is_valid : std_logic; -- AÑADIDO: Memoria de si la firma fue válida
+        is_valid : std_logic_vector(15 downto 0);
         pub_seed : std_logic_vector(n*8-1 downto 0);
+        -- NUEVO: Registros para Redundancia Temporal
+        check_1_pass  : std_logic;
+        calc_root_reg : std_logic_vector(n*8-1 downto 0);
+        exp_root_reg  : std_logic_vector(n*8-1 downto 0);
     end record;
 
     signal compute_root : xmss_compute_root_input_type;
     signal r, r_in : reg_type;
     signal modules_root_q : xmss_compute_root_output_type;
+
+    attribute DONT_TOUCH : string;
+    attribute DONT_TOUCH of r : signal is "TRUE";
+    attribute DONT_TOUCH of r_in : signal is "TRUE";
+    
 
 begin
     
@@ -118,24 +128,45 @@ begin
 
      	      when S_COMP_ROOT =>
      	          q.mode_select_l1 <= "00";
-                  compute_root.enable <= '1';
+     	          compute_root.enable <= '1';
      	          if modules_root_q.done = '1' then
-                      -- Evaluamos la raíz y la guardamos en el registro
-     	              if modules_root_q.root = d.bram.b.dout then 
-     	                  v.is_valid := '1';
-                      else
-                          v.is_valid := '0';
-                      end if;
-     	              v.state := S_DONE; -- AÑADIDO: Transición al estado de retención
+                      -- 1. NO COMPROBAMOS AÚN. Latch de datos en registros seguros
+                      v.calc_root_reg := modules_root_q.root;
+                      v.exp_root_reg  := d.bram.b.dout;
+     	              v.state := S_CHECK_1; 
      	          end if;
 
-              -- AÑADIDO: ESTADO DE RETENCIÓN (HANDSHAKE)
+              -- 2. PRIMERA VERIFICACIÓN
+              when S_CHECK_1 =>
+                  if r.calc_root_reg = r.exp_root_reg then
+                      v.check_1_pass := '1';
+                      v.state := S_WAIT_DELAY;
+                  else
+                      v.check_1_pass := '0';
+                      v.is_valid := STATUS_INVALID;
+                      v.state := S_DONE;
+                  end if;
+
+              -- 3. SEPARACIÓN TEMPORAL (Retardo de 1 ciclo)
+              when S_WAIT_DELAY =>
+                  v.state := S_CHECK_2;
+
+              -- 4. SEGUNDA VERIFICACIÓN REDUNDANTE
+              when S_CHECK_2 =>
+                  -- Comprobamos comparador Y que el ciclo anterior también pasó
+                  if (r.calc_root_reg = r.exp_root_reg) and (r.check_1_pass = '1') then 
+                      v.is_valid := STATUS_VALID;
+                  else
+                      v.is_valid := STATUS_INVALID;
+                  end if;
+                  v.state := S_DONE;
+
               when S_DONE =>
-                  q.done <= '1'; -- Mantenemos el aviso de terminado activo
-                  -- Esperamos a que el procesador dé acuse de recibo bajando el enable
+                  q.done <= '1';
                   if d.enable = '0' then
-                      v.is_valid := '0'; -- Limpiamos el resultado
-                      v.state := S_IDLE; -- Volvemos a reposo
+                      v.is_valid := STATUS_IDLE; 
+                      v.check_1_pass := '0';
+                      v.state := S_IDLE; 
                   end if;
 
 	    end case;
@@ -159,8 +190,12 @@ begin
 	       r.state <= S_IDLE;
            r.index <= (others => '0');
            r.bram_state_b <= B_INDEX;
-           r.is_valid <= '0'; -- AÑADIDO: Limpieza del registro de validación
+           r.is_valid <= STATUS_IDLE; 
            r.pub_seed <= (others => '0');
+           -- NUEVO: Limpieza estricta de variables de seguridad
+           r.check_1_pass <= '0';
+           r.calc_root_reg <= (others => '0');
+           r.exp_root_reg <= (others => '0');
 	    else
 		   r <= r_in;
         end if;
