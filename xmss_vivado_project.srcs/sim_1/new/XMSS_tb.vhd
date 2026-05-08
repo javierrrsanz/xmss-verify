@@ -249,3 +249,8 @@ begin
         else
             report "    [FAIL] El Top Level no limpio las senales despues de bajar enable." severity error;
         end if;
+        
+        wait;
+    end process;
+
+end Behavioral;
