@@ -90,6 +90,7 @@ begin
     begin
         v := r;
         q.hash <= ZERO_HASH_INPUT;
+        q.hash.halt <= '0';
         q.bram.wen <= '0';
         q.done <= '0';
         q.sig_mem.req <= '0';

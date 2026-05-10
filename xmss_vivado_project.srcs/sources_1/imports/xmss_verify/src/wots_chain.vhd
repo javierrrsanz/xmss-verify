@@ -45,6 +45,7 @@ begin
     begin
        v := r;
        q.hash.enable <= '0';
+       q.hash.halt <= '0';
        q.hash.id.block_ctr <= (others => '0');
        q.done <= '0';
        hash_sel <= d.hash.id.block_ctr;
