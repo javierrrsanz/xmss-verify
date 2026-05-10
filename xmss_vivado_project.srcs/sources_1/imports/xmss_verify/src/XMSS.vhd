@@ -124,22 +124,21 @@ begin
         end if;
     end process;
 
-    -- Inferencia de Memoria BRAM Interna
+-- Inferencia de Memoria BRAM Interna (Optimizada para RAMB36)
     process(clk)
     begin
         if rising_edge(clk) then
+            -- PUERTO A: Estrictamente de Lectura
             if scratch_en_a = '1' then
-                if scratch_wen_a = '1' then
-                    scratch_mem(to_integer(unsigned(scratch_addr_a))) <= scratch_din_a;
-                end if;
-                scratch_dout_a <= scratch_mem(to_integer(unsigned(scratch_addr_a)));
+                scratch_dout_a <= scratch_mem(to_integer(unsigned(scratch_addr_a(6 downto 0))));
             end if;
 
+            -- PUERTO B: Lectura y Escritura
             if scratch_en_b = '1' then
                 if scratch_wen_b = '1' then
-                    scratch_mem(to_integer(unsigned(scratch_addr_b))) <= scratch_din_b;
+                    scratch_mem(to_integer(unsigned(scratch_addr_b(6 downto 0)))) <= scratch_din_b;
                 end if;
-                scratch_dout_b <= scratch_mem(to_integer(unsigned(scratch_addr_b)));
+                scratch_dout_b <= scratch_mem(to_integer(unsigned(scratch_addr_b(6 downto 0))));
             end if;
         end if;
     end process;

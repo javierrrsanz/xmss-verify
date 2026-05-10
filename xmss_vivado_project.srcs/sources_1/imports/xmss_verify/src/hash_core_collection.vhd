@@ -131,13 +131,13 @@ combinational : process (r, d, done, mnext, hash_outputs)
 
        if v.busy_indicator = ALL_ONES then v.busy := '1'; end if;
 
-       -- Fallback ID
+      -- Fallback ID (Logica blindada contra bucles combinacionales)
        v_fallback_done := false;
        if v.arb_state = ARB_IDLE and r.mnext_queue = ALL_ZEROS then
            for k in 0 to HASH_CORES-1 loop
-               -- CLAVE PARA ROMPER EL BUCLE FÍSICO: Evaluamos r.busy_indicator en lugar de v.
-               -- Así no reenviamos el ID en el mismo ciclo exacto en el que llega un nuevo d.enable
-               if v.busy_indicator(k) = '1' and r.busy_indicator(k) = '1' and not v_fallback_done then
+               -- CLAVE: Usamos estrictamente registros (r.) y la senal 'done' 
+               -- para que q.id NUNCA dependa combinacionalmente de d.enable
+               if r.busy_indicator(k) = '1' and r.done_queue(k) = '0' and done(k) = '0' and not v_fallback_done then
                    q.id <= r.ids(k);
                    v_fallback_done := true;
                end if;
