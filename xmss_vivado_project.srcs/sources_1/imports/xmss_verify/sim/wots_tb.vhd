@@ -12,10 +12,14 @@ architecture Behavioral of wots_tb is
     constant clk_period : time := 5 ns;
     signal clk, reset : std_logic := '0';
     
-	signal wots_in : wots_input_type;
-	signal wots_out : wots_output_type;
+    signal wots_in : wots_input_type;
+    signal wots_out : wots_output_type;
     signal hash_in : hash_subsystem_input_type;
     signal hash_out: hash_subsystem_output_type;
+
+    -- Señales para emular el DMA
+    signal mem_pending : std_logic := '0';
+    signal mem_addr_lat : std_logic_vector(31 downto 0) := (others => '0');
 
     -- Semilla Pública Constante (NIST Vector Oficial)
     constant PUB_SEED : std_logic_vector(255 downto 0) := x"0C3052F5D059043BABFA627EA37C03D49191A2997D0833DA274137EDDEF66168";
@@ -23,7 +27,7 @@ architecture Behavioral of wots_tb is
     -- MHASH resultante de Hash Message (NIST Vector Oficial)
     constant KAT_MHASH : std_logic_vector(255 downto 0) := x"ef68acaa1577a4e834264f6e622310fff106e4b1d65b106a9937272269c0afdd";
 
-	type ram_type is array (0 to 2**BRAM_ADDR_SIZE - 1) of std_logic_vector(n*8 - 1 downto 0);
+    type ram_type is array (0 to 2**BRAM_ADDR_SIZE - 1) of std_logic_vector(n*8 - 1 downto 0);
 
     -- Cargamos la BRAM con la firma oficial de 67 bloques
     impure function init_bram return ram_type is
@@ -100,91 +104,108 @@ architecture Behavioral of wots_tb is
         return mem_var;
     end function;
 
-	signal bram_memory : ram_type := init_bram;
+    signal bram_memory : ram_type := init_bram;
 
 begin
-
-    -- =========================================================================
-    -- Emulador de Memoria BRAM (Puerto B)
-    -- =========================================================================
-    process(clk)
-    begin
-        if rising_edge(clk) then
-            if wots_out.bram.b.en = '1' then
-                if wots_out.bram.b.wen = '1' then
-                    bram_memory(to_integer(unsigned(wots_out.bram.b.addr))) <= wots_out.bram.b.din;
-                end if;
-                wots_in.bram_b.dout <= bram_memory(to_integer(unsigned(wots_out.bram.b.addr)));
-            end if;
-        end if;
-    end process;
 
     -- =========================================================================
     -- Instancia del módulo WOTS+ principal
     -- =========================================================================
     uut : entity work.wots
-	port map(
-		clk   => clk,
-		reset => reset,
-		d     => wots_in,
-	    q     => wots_out
-	);
+    port map(
+        clk   => clk,
+        reset => reset,
+        d     => wots_in,
+        q     => wots_out
+    );
 
     -- =========================================================================
     -- Instancia del módulo Hash Core
     -- =========================================================================
     hash : entity work.hash_core_collection
-	port map(
-	   clk   => clk,
-	   reset => reset,
-	   d     => wots_out.hash,
-	   q     => hash_out 
-	);
-    
+    port map(
+       clk   => clk,
+       reset => reset,
+       d     => wots_out.hash,
+       q     => hash_out 
+    );
     wots_in.hash <= hash_out;
+
+    -- =========================================================================
+    -- Emulador de Memoria (BRAM Scratchpad + DMA OBI)
+    -- =========================================================================
+    wots_in.sig_mem.gnt <= '1';
+
+    process(clk)
+        variable idx : integer;
+    begin
+        if rising_edge(clk) then
+            -- 1. DMA Emulation (Read Signature)
+            wots_in.sig_mem.valid <= '0';
+            
+            if mem_pending = '1' then
+                idx := to_integer(shift_right(unsigned(mem_addr_lat), 5));
+                wots_in.sig_mem.data <= bram_memory(idx);
+                wots_in.sig_mem.valid <= '1';
+                mem_pending <= '0';
+            end if;
+            
+            if wots_out.sig_mem.req = '1' then
+                mem_addr_lat <= wots_out.sig_mem.addr;
+                mem_pending <= '1';
+            end if;
+
+            -- 2. BRAM Scratchpad Emulation (Write PK internally)
+            if wots_out.bram.b.en = '1' then
+                if wots_out.bram.b.wen = '1' then
+                    bram_memory(to_integer(unsigned(wots_out.bram.b.addr))) <= wots_out.bram.b.din;
+                end if;
+            end if;
+        end if;
+    end process;
 
     -- =========================================================================
     -- Generador de Reloj
     -- =========================================================================
     process
-	begin
-		clk <= '1'; wait for clk_period / 2;
-		clk <= '0'; wait for clk_period / 2;
-	end process;
+    begin
+        clk <= '1'; wait for clk_period / 2;
+        clk <= '0'; wait for clk_period / 2;
+    end process;
 
     -- =========================================================================
     -- Proceso de Estímulos Principal
     -- =========================================================================
     process
-	begin
-		wots_in.module_input.enable <= '0';
+    begin
+        wots_in.module_input.enable <= '0';
         wots_in.pub_seed <= PUB_SEED;
-		wots_in.module_input.address_4 <= x"00000000";
+        wots_in.module_input.address_4 <= x"00000000";
         wots_in.module_input.message <= KAT_MHASH;
 
-		reset <= '1';
-		wait for 4 * clk_period;
+        reset <= '1';
+        wait for 4 * clk_period;
         reset <= '0';
-		wait for 4 * clk_period;
+        wait for 4 * clk_period;
 
-		-------------------------------------------------
-		-- TEST DE VERIFICACIÓN WOTS+
-		-------------------------------------------------
-		report "=========================================================" severity note;
-		report "=== INICIANDO WOTS+ TB: MODO VERIFICACION ESTRICTA ===" severity note;
-		
-		wots_in.module_input.enable <= '1';
-		wait for clk_period;
-		wots_in.module_input.enable <= '0';
-		
-		wait until wots_out.module_output.done = '1';
+        -------------------------------------------------
+        -- TEST DE VERIFICACIÓN WOTS+
+        -------------------------------------------------
+        report "=========================================================" severity note;
+        report "=== INICIANDO WOTS+ TB: MODO VERIFICACION (DMA)       ===" severity note;
+        
+        wots_in.module_input.enable <= '1';
+        wait for clk_period;
+        wots_in.module_input.enable <= '0';
+
+        wait until wots_out.module_output.done = '1';
         wait until rising_edge(clk);
 
-		report "=== VERIFICACION COMPLETADA EXITOSAMENTE ===" severity note;
-		report "    [PASS] 67 Bloques de la firma expandidos a Clave Publica y guardados en BRAM." severity note;
-		report "=========================================================" severity note;
+        report "=== VERIFICACION COMPLETADA EXITOSAMENTE ===" severity note;
+        report "    [PASS] 67 Bloques leidos por DMA y expandidos a Clave Publica en BRAM." severity note;
+        report "=========================================================" severity note;
         
         wait;
-	end process;
+    end process;
 
 end Behavioral;

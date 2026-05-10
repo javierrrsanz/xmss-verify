@@ -56,7 +56,19 @@ package params is
     end record;
 
    type bram_interface_out is record
-	   DOUT          :  STD_LOGIC_VECTOR(n*8-1 DOWNTO 0);
+       DOUT          :  STD_LOGIC_VECTOR(n*8-1 DOWNTO 0);
+   end record;
+   
+   -- NUEVO: Interfaz de lectura externa (DMA OBI) de un solo outstanding
+   type mem_read_req is record
+       req  : std_logic;
+       addr : std_logic_vector(31 downto 0); -- Bus de 32 bits para el OBI
+   end record;
+
+   type mem_read_rsp is record
+       gnt   : std_logic;
+       valid : std_logic;
+       data  : std_logic_vector(n*8-1 downto 0);
    end record;
     
     type dual_port_bram_in is record
@@ -76,8 +88,20 @@ package params is
         din => (others => '-')
      );
 
+     constant mem_read_req_zero : mem_read_req := (
+         req => '0',
+         addr => (others => '0')
+     );
+
+     constant mem_read_rsp_zero : mem_read_rsp := (
+         gnt => '0',
+         valid => '0',
+         data => (others => '0')
+     );
+
      constant dual_bram_zero : dual_port_bram_in :=(
         a=> bram_zero,
-        b=> bram_zero);
-	
+        b=> bram_zero
+     );
+    
 end package;

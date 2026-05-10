@@ -43,7 +43,7 @@ begin
         port map(
             clk     => clk, reset => reset, d.enable  => enable(I),
             -- FIX: Usamos el registro 'r' para no congelarlo prematuramente
-            d.len  => d.len, d.input => d.input, d.halt => r.halt_indicator(I),
+            d.len  => d.len, d.input => d.input, d.halt => r.halt_indicator(I) or d.halt, -- <--- AÑADIDO: OR d.halt
             q.done  => done(I), q.mnext => mnext(I), q.o => hash_outputs(I));
       end generate SWITCH_SHA;
    end generate HashCore;

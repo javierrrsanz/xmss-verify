@@ -19,12 +19,16 @@ architecture Behavioral of croot_tb is
     signal hash_in    : hash_subsystem_input_type;
     signal hash_out   : hash_subsystem_output_type;
 
-    -- Emulador de BRAM
+    -- Emulador de Memoria
     type ram_type is array (0 to 2**BRAM_ADDR_SIZE - 1) of std_logic_vector(n*8 - 1 downto 0);
     signal bram_memory : ram_type := (others => (others => '0'));
 
     -- Semilla Pública Constante (NIST Vector)
     constant PUB_SEED : std_logic_vector(255 downto 0) := x"602b26ef82322218b61c22a9581989384d0d4a5653a5d761e3f8fbe80f5020bb";
+
+    -- Señales para emular el DMA
+    signal mem_pending : std_logic := '0';
+    signal mem_addr_lat : std_logic_vector(31 downto 0) := (others => '0');
 
     -- Función auxiliar para imprimir el Hash
     function to_hex_string(sv : std_logic_vector) return string is
@@ -69,12 +73,28 @@ begin
     hash_in       <= thash_out.hash;
     thash_in.hash <= hash_out;
 
-    -- Emulador de Memoria BRAM (Solo lectura para Compute Root)
+    -- =====================================================================
+    -- EMULADOR DE MEMORIA EXTERNA (DMA OBI)
+    -- =====================================================================
+    croot_in.mem.gnt <= '1'; -- El bus siempre acepta peticiones
+
     process(clk)
+        variable idx : integer;
     begin
         if rising_edge(clk) then
-            if croot_out.bram.en = '1' then
-                croot_in.bram.dout <= bram_memory(to_integer(unsigned(croot_out.bram.addr)));
+            croot_in.mem.valid <= '0';
+
+            if mem_pending = '1' then
+                -- La dirección viene en bytes. Dividimos por 32 (shift_right 5) para sacar el índice del array
+                idx := to_integer(shift_right(unsigned(mem_addr_lat), 5));
+                croot_in.mem.data <= bram_memory(idx);
+                croot_in.mem.valid <= '1';
+                mem_pending <= '0';
+            end if;
+
+            if croot_out.mem.req = '1' then
+                mem_addr_lat <= croot_out.mem.addr;
+                mem_pending <= '1';
             end if;
         end if;
     end process;
@@ -83,7 +103,8 @@ begin
     -- GENERADOR DE RELOJ
     -- =====================================================================
     process begin
-        clk <= '1'; wait for clk_period / 2;
+        clk <= '1';
+        wait for clk_period / 2;
         clk <= '0'; wait for clk_period / 2;
     end process;
 
@@ -108,13 +129,9 @@ begin
 
         report "=======================================================" severity note;
         report "=== INICIANDO PRUEBA DE COMPUTE_ROOT (10 NIVELES) ===" severity note;
-        
-        -- Inyectamos el Leaf Node que calculaste en la prueba anterior
+
+        -- Inyectamos el Leaf Node 
         croot_in.leaf <= x"ac99903b040ab13c33f7ee1a1751c8d67737ab76bd700a9563ff58c611050da8";
-        
-        -- Le damos un índice de firma aleatorio (ej. la firma número 5)
-        -- Esto probará que el módulo sabe colocar el nodo a la izquierda o a la derecha
-        -- dependiendo de si el bit del índice es par o impar.
         croot_in.leaf_idx <= 5; 
 
         -- Arrancamos

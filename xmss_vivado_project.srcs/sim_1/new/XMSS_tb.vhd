@@ -19,50 +19,46 @@ architecture Behavioral of XMSS_tb is
     signal mlen        : std_logic_vector(31 downto 0) := (others => '0');
     signal done        : std_logic;
     signal valid       : std_logic_vector(15 downto 0);
-    -- Señales BRAM Puerto A
-    signal bram_en_a   : std_logic;
-    signal bram_wen_a  : std_logic;
-    signal bram_addr_a : std_logic_vector(BRAM_ADDR_SIZE-1 downto 0);
-    signal bram_din_a  : std_logic_vector(n*8-1 downto 0);
-    signal bram_dout_a : std_logic_vector(n*8-1 downto 0) := (others => '0');
-
-    -- Señales BRAM Puerto B
-    signal bram_en_b   : std_logic;
-    signal bram_wen_b  : std_logic;
-    signal bram_addr_b : std_logic_vector(BRAM_ADDR_SIZE-1 downto 0);
-    signal bram_din_b  : std_logic_vector(n*8-1 downto 0);
-    signal bram_dout_b : std_logic_vector(n*8-1 downto 0) := (others => '0');
+    
+    -- Interfaz Memoria Externa (Emulación de DMA OBI)
+    signal sig_base   : std_logic_vector(31 downto 0) := (others => '0');
+    signal msg_base   : std_logic_vector(31 downto 0) := (others => '0');
+    signal pk_base    : std_logic_vector(31 downto 0) := (others => '0');
+    signal mem_req    : std_logic;
+    signal mem_addr   : std_logic_vector(31 downto 0);
+    signal mem_gnt    : std_logic := '0';
+    signal mem_rvalid : std_logic := '0';
+    signal mem_rdata  : std_logic_vector(n*8-1 downto 0) := (others => '0');
 
     -- =====================================================================
     -- INYECCIÓN DEL TEST VECTOR GENERADO (Script C)
     -- =====================================================================
     
-       -- Semilla Publica Oficial 
+    -- Clave Pública Oficial (Vector NIST)
     constant PUB_SEED : std_logic_vector(255 downto 0) := x"0C3052F5D059043BABFA627EA37C03D49191A2997D0833DA274137EDDEF66168";
+    constant PK_ROOT  : std_logic_vector(255 downto 0) := x"A3F3840A84B677379478D1DFE084F8F528F79C0DF72A9E8A937775EBECCF60F8";
+    
+    -- Mensaje Oficial ("Firma TFG VHDL")
+    constant MSG_BLOCK0 : std_logic_vector(255 downto 0) := x"4669726D6120544647205648444C000000000000000000000000000000000000";
+
+    -- Mapa de Memoria del Sistema Emulado
+    constant SIG_BASE_C : std_logic_vector(31 downto 0) := x"00000000";
+    constant PK_BASE_C  : std_logic_vector(31 downto 0) := x"00010000";
+    constant MSG_BASE_C : std_logic_vector(31 downto 0) := x"00020000";
 
     type ram_type is array (0 to 2**BRAM_ADDR_SIZE - 1) of std_logic_vector(n*8 - 1 downto 0);
 
+    -- Carga de la firma en la "SRAM" del sistema
     impure function init_bram return ram_type is
         variable mem_var : ram_type := (others => (others => '0'));
     begin
-        -- El módulo hash_message lee la raíz desde aquí (Dirección 0)
-        mem_var(BRAM_PK) := x"A3F3840A84B677379478D1DFE084F8F528F79C0DF72A9E8A937775EBECCF60F8";
         -- 1. INDICE (Firma 0, rellenado a 256 bits)
         mem_var(BRAM_XMSS_SIG) := x"0000000000000000000000000000000000000000000000000000000000000000"; 
         
         -- 2. RANDOMNESS (R)
         mem_var(BRAM_XMSS_SIG + 1) := x"83BECF8807135195BC71DE8E314AC7A6ECEE8B5A6FCFF2FDAB00D9494A72968B"; 
         
-        -- 3. PUB_SEED
-        mem_var(BRAM_XMSS_SIG + 2) := PUB_SEED; 
-        
-        -- 4. ROOT CALCULADA POR EL CÓDIGO EN C (La que debe abrir el "Candado")
-        mem_var(BRAM_XMSS_SIG + 3) := x"A3F3840A84B677379478D1DFE084F8F528F79C0DF72A9E8A937775EBECCF60F8"; 
-        
-        -- 5. MENSAJE: "Firma TFG VHDL" (Hex: 4669726D6120544647205648444C, padding con ceros a 256 bits)
-        mem_var(BRAM_MESSAGE) := x"4669726D6120544647205648444C000000000000000000000000000000000000";
-
-        -- 6. LOS 67 BLOQUES DE LA FIRMA WOTS+
+        -- LOS 67 BLOQUES DE LA FIRMA WOTS+
         mem_var(BRAM_XMSS_SIG_WOTS + 0) := x"49DADC5FE200C42CECE300CB71B0DD37E38D1DE0F766438F09C16028887D60D9";
         mem_var(BRAM_XMSS_SIG_WOTS + 1) := x"868C74920658323B7C9CDD670A68C9B7DE18C808EA42A2D4F9B4A5E3D70FF2F7";
         mem_var(BRAM_XMSS_SIG_WOTS + 2) := x"097FC69AC835B00E4B503FE75442D94A1D27FF63155B192697997D1F6F4C642C";
@@ -146,10 +142,16 @@ architecture Behavioral of XMSS_tb is
         return mem_var;
     end function;
 
-
-    signal bram_memory : ram_type := init_bram;
+    signal sig_memory : ram_type := init_bram;
+    signal mem_pending : std_logic := '0';
+    signal mem_addr_lat : std_logic_vector(31 downto 0) := (others => '0');
 
 begin
+
+    sig_base <= SIG_BASE_C;
+    pk_base  <= PK_BASE_C;
+    msg_base <= MSG_BASE_C;
+    mem_gnt  <= '1'; -- El bus siempre acepta la petición inmediatamente
 
     -- Instancia del Wrapper (Device Under Test)
     uut : entity work.XMSS
@@ -158,20 +160,17 @@ begin
             reset       => reset,
             enable      => enable,
             mlen        => mlen,
+            sig_base    => sig_base,
+            msg_base    => msg_base,
+            pk_base     => pk_base,
             done        => done,
             valid       => valid,
             
-            bram_en_a   => bram_en_a,
-            bram_wen_a  => bram_wen_a,
-            bram_addr_a => bram_addr_a,
-            bram_din_a  => bram_din_a,
-            bram_dout_a => bram_dout_a,
-            
-            bram_en_b   => bram_en_b,
-            bram_wen_b  => bram_wen_b,
-            bram_addr_b => bram_addr_b,
-            bram_din_b  => bram_din_b,
-            bram_dout_b => bram_dout_b
+            mem_req     => mem_req,
+            mem_addr    => mem_addr,
+            mem_gnt     => mem_gnt,
+            mem_rvalid  => mem_rvalid,
+            mem_rdata   => mem_rdata
         );
 
     -- Generador de Reloj
@@ -181,24 +180,48 @@ begin
         clk <= '0'; wait for clk_period / 2;
     end process;
 
-    -- Emulador de BRAM (Memoria externa)
+    -- Emulador de Memoria Externa (Lectura 256-bit por DMA)
     process(clk)
+        variable addr_u : unsigned(31 downto 0);
+        variable idx : integer;
     begin
         if rising_edge(clk) then
-            -- Puerto A
-            if bram_en_a = '1' then
-                if bram_wen_a = '1' then
-                    bram_memory(to_integer(unsigned(bram_addr_a))) <= bram_din_a;
+            mem_rvalid <= '0';
+
+            if mem_pending = '1' then
+                addr_u := unsigned(mem_addr_lat);
+                
+                -- RUTEO SEGÚN MAPA DE MEMORIA DE X-HEEP
+                if addr_u >= unsigned(MSG_BASE_C) then
+                    idx := to_integer(shift_right(addr_u - unsigned(MSG_BASE_C), 5));
+                    if idx = 0 then
+                        mem_rdata <= MSG_BLOCK0;
+                    else
+                        mem_rdata <= (others => '0');
+                    end if;
+                    
+                elsif addr_u >= unsigned(PK_BASE_C) then
+                    idx := to_integer(shift_right(addr_u - unsigned(PK_BASE_C), 5));
+                    if idx = 0 then
+                        mem_rdata <= PK_ROOT;
+                    elsif idx = 1 then
+                        mem_rdata <= PUB_SEED;
+                    else
+                        mem_rdata <= (others => '0');
+                    end if;
+                    
+                else
+                    idx := to_integer(shift_right(addr_u - unsigned(SIG_BASE_C), 5));
+                    mem_rdata <= sig_memory(idx);
                 end if;
-                bram_dout_a <= bram_memory(to_integer(unsigned(bram_addr_a)));
+                
+                mem_rvalid <= '1';
+                mem_pending <= '0';
             end if;
 
-            -- Puerto B
-            if bram_en_b = '1' then
-                if bram_wen_b = '1' then
-                    bram_memory(to_integer(unsigned(bram_addr_b))) <= bram_din_b;
-                end if;
-                bram_dout_b <= bram_memory(to_integer(unsigned(bram_addr_b)));
+            if mem_req = '1' then
+                mem_addr_lat <= mem_addr;
+                mem_pending <= '1';
             end if;
         end if;
     end process;
@@ -218,13 +241,13 @@ begin
         wait for 50 ns;
 
         report "===========================================================" severity note;
-        report "=== INICIANDO VERIFICACION EN EL TOP (XMSS)             ===" severity note;
+        report "=== INICIANDO VERIFICACION EN EL TOP (XMSS DMA)         ===" severity note;
         report "===========================================================" severity note;
 
         wait until rising_edge(clk);
-        enable <= '1'; -- Simulamos que el procesador arranca el hardware
+        enable <= '1'; -- Simulamos que el procesador (Boot ROM) arranca el hardware
 
-        -- Esperar a que el hardware orqueste y finalice
+        -- Esperar a que el hardware orqueste todas las lecturas de memoria y finalice
         wait until done = '1';
         
         report " " severity note;
@@ -232,7 +255,7 @@ begin
 
         -- Comprobación del resultado
         if valid = STATUS_VALID then
-            report "    [PASS] FIRMA VALIDA. EL HARDWARE VERIFICO CORRECTAMENTE LA FIRMA." severity note;
+            report "    [PASS] FIRMA VALIDA. EL HARDWARE LEYO Y VERIFICO CORRECTAMENTE LA FIRMA." severity note;
         else
             report "    [FAIL] RESULTADO DE LA FIRMA: INVALIDA." severity error;
         end if;

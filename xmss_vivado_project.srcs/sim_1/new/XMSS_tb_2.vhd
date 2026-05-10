@@ -24,25 +24,24 @@ architecture Behavioral of XMSS_tb_2 is
     signal mlen        : std_logic_vector(31 downto 0) := (others => '0');
     signal done        : std_logic;
     signal valid       : std_logic_vector(15 downto 0);
-
-    -- Señales de la BRAM emulada (Interfaz con el DUT)
-    signal bram_en_a   : std_logic;
-    signal bram_wen_a  : std_logic;
-    signal bram_addr_a : std_logic_vector(BRAM_ADDR_SIZE-1 downto 0);
-    signal bram_din_a  : std_logic_vector(n*8-1 downto 0);
-    signal bram_dout_a : std_logic_vector(n*8-1 downto 0) := (others => '0');
-
-    signal bram_en_b   : std_logic;
-    signal bram_wen_b  : std_logic;
-    signal bram_addr_b : std_logic_vector(BRAM_ADDR_SIZE-1 downto 0);
-    signal bram_din_b  : std_logic_vector(n*8-1 downto 0);
-    signal bram_dout_b : std_logic_vector(n*8-1 downto 0) := (others => '0');
-
-    -- Definición de la estructura de memoria RAM
-    type ram_type is array (0 to 2**BRAM_ADDR_SIZE - 1) of std_logic_vector(n*8 - 1 downto 0);
     
-    -- Inicializamos vacía, se cargará dinámicamente en el proceso
+    -- Interfaz Memoria Externa (Emulación DMA)
+    signal sig_base    : std_logic_vector(31 downto 0) := x"00000000";
+    signal msg_base    : std_logic_vector(31 downto 0) := x"00020000";
+    signal pk_base     : std_logic_vector(31 downto 0) := x"00010000";
+    signal mem_req     : std_logic;
+    signal mem_addr    : std_logic_vector(31 downto 0);
+    signal mem_gnt     : std_logic := '1'; -- GNT siempre a 1 (bus sin contención en simulación)
+    signal mem_rvalid  : std_logic := '0';
+    signal mem_rdata   : std_logic_vector(n*8-1 downto 0) := (others => '0');
+
+    -- Definición de la estructura de memoria RAM para albergar el archivo de texto
+    type ram_type is array (0 to 2**BRAM_ADDR_SIZE - 1) of std_logic_vector(n*8 - 1 downto 0);
     signal bram_memory : ram_type := (others => (others => '0'));
+
+    -- Señales de latencia para el DMA
+    signal mem_pending : std_logic := '0';
+    signal mem_addr_lat : std_logic_vector(31 downto 0) := (others => '0');
 
 begin
 
@@ -53,45 +52,41 @@ begin
             reset       => reset,
             enable      => enable,
             mlen        => mlen,
+            sig_base    => sig_base,
+            msg_base    => msg_base,
+            pk_base     => pk_base,
             done        => done,
             valid       => valid,
             
-            bram_en_a   => bram_en_a,
-            bram_wen_a  => bram_wen_a,
-            bram_addr_a => bram_addr_a,
-            bram_din_a  => bram_din_a,
-            bram_dout_a => bram_dout_a,
-            
-            bram_en_b   => bram_en_b,
-            bram_wen_b  => bram_wen_b,
-            bram_addr_b => bram_addr_b,
-            bram_din_b  => bram_din_b,
-            bram_dout_b => bram_dout_b
+            mem_req     => mem_req,
+            mem_addr    => mem_addr,
+            mem_gnt     => mem_gnt,
+            mem_rvalid  => mem_rvalid,
+            mem_rdata   => mem_rdata
         );
 
     -- 2. GENERADOR DE RELOJ
     process
     begin
-        clk <= '1';
-        wait for clk_period / 2;
-        clk <= '0';
-        wait for clk_period / 2;
+        clk <= '1'; wait for clk_period / 2;
+        clk <= '0'; wait for clk_period / 2;
     end process;
 
-    -- 3. EMULADOR DE BRAM DUAL-PORT CON CARGA DINÁMICA DE TEXTIO
+    -- 3. LECTURA TEXTIO Y EMULADOR DE DMA
     process(clk)
         file mem_file : text;
         variable L : line;
         variable hex_val : std_logic_vector(n*8 - 1 downto 0);
         variable i : integer;
         variable mem_loaded : boolean := false;
+        variable addr_u : unsigned(31 downto 0);
+        variable idx : integer;
     begin
         if rising_edge(clk) then
             
-            -- Durante el RESET inicial, leemos el archivo del disco duro
             if reset = '1' then
+                -- Durante el RESET, cargamos la firma automática
                 if not mem_loaded then
-                    -- Ruta absoluta a tu archivo generado por WSL
                     file_open(mem_file, "C:/Users/javie/OneDrive/Escritorio/TFG/XMSS github/xmss-reference-master/xmss-reference-master/firma_memoria.dat", read_mode);
                     i := 0;
                     while not endfile(mem_file) and i < 2**BRAM_ADDR_SIZE loop
@@ -103,27 +98,40 @@ begin
                         end if;
                     end loop;
                     file_close(mem_file);
-                    mem_loaded := true; -- Evita leer el archivo repetidamente mientras el reset siga a 1
+                    mem_loaded := true;
                 end if;
                 
-            -- Cuando NO hay reset, la BRAM funciona normal interactuando con el hardware
+                mem_pending <= '0';
+                mem_rvalid <= '0';
+                
             else
-                mem_loaded := false; -- Reseteamos el flag por si lanzamos otro reset a mitad de simulación
-
-                -- Puerto A
-                if bram_en_a = '1' then
-                    if bram_wen_a = '1' then
-                        bram_memory(to_integer(unsigned(bram_addr_a))) <= bram_din_a;
+                mem_loaded := false; -- Reset flag for next simulation run
+                mem_rvalid <= '0';
+                
+                -- Emulación de DMA (Retardo de 1 ciclo en la respuesta)
+                if mem_pending = '1' then
+                    addr_u := unsigned(mem_addr_lat);
+                    
+                    -- DECODIFICACIÓN INVERSA: De dirección OBI a índice del archivo .dat
+                    if addr_u = unsigned(pk_base) + 4 then
+                        mem_rdata <= bram_memory(BRAM_PK);          -- Root
+                    elsif addr_u = unsigned(pk_base) + 36 then
+                        mem_rdata <= bram_memory(BRAM_PK + 1);      -- Pub_Seed
+                    elsif addr_u >= unsigned(msg_base) then
+                        idx := to_integer(shift_right(addr_u - unsigned(msg_base), 5));
+                        mem_rdata <= bram_memory(BRAM_MESSAGE + idx); -- Mensaje
+                    else
+                        idx := to_integer(shift_right(addr_u - unsigned(sig_base), 5));
+                        mem_rdata <= bram_memory(idx);              -- Todo lo demás (R, WOTS, AuthPath)
                     end if;
-                    bram_dout_a <= bram_memory(to_integer(unsigned(bram_addr_a)));
+                    
+                    mem_rvalid <= '1';
+                    mem_pending <= '0';
                 end if;
 
-                -- Puerto B
-                if bram_en_b = '1' then
-                    if bram_wen_b = '1' then
-                        bram_memory(to_integer(unsigned(bram_addr_b))) <= bram_din_b;
-                    end if;
-                    bram_dout_b <= bram_memory(to_integer(unsigned(bram_addr_b)));
+                if mem_req = '1' then
+                    mem_addr_lat <= mem_addr;
+                    mem_pending <= '1';
                 end if;
             end if;
         end if;
@@ -132,32 +140,28 @@ begin
     -- 4. SECUENCIA DE ESTÍMULOS
     process
     begin
-        -- Estado inicial y Reset (Esto dispara la lectura del archivo)
+        -- Estado inicial y Reset
         reset <= '1';
         enable <= '0';
         -- Mensaje: "Firma TFG VHDL" (14 bytes = 112 bits)
         mlen <= std_logic_vector(to_unsigned(112, 32));
-        
         wait for 100 ns;
         wait until rising_edge(clk);
         reset <= '0';
         wait for 50 ns;
 
         report "===========================================================" severity note;
-        report "=== INICIANDO VERIFICACION AUTOMATIZADA (TB_2)          ===" severity note;
+        report "=== INICIANDO VERIFICACION AUTOMATIZADA (TB_2) OBI DMA  ===" severity note;
         report "===========================================================" severity note;
 
-        -- El procesador da la orden de inicio al acelerador
         wait until rising_edge(clk);
         enable <= '1';
 
-        -- Monitorización: Esperamos a que el hardware levante la señal 'done'
         wait until done = '1';
         
         report " " severity note;
         report "=== VERIFICACION FINALIZADA ===" severity note;
 
-        -- Comprobación del resultado de seguridad multibit
         if valid = STATUS_VALID then
             report "    [PASS] FIRMA VALIDA. EL HARDWARE VERIFICO CORRECTAMENTE." severity note;
         else
@@ -165,11 +169,9 @@ begin
         end if;
         report "===========================================================" severity note;
 
-        -- Handshake final: bajamos enable tras ver el resultado
         wait for 5 * clk_period;
         enable <= '0';
         
-        -- Comprobar si la FSM vuelve a IDLE correctamente
         wait for 10 * clk_period;
         if valid = STATUS_IDLE and done = '0' then
             report "    [INFO] Top Level en reposo correctamente." severity note;

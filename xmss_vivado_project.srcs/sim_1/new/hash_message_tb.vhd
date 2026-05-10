@@ -9,7 +9,6 @@ end hash_message_tb;
 
 architecture Behavioral of hash_message_tb is
     constant clk_period : time := 10 ns;
-    
     signal clk, reset : std_logic := '0';
     
     -- Señales de interconexión
@@ -18,9 +17,9 @@ architecture Behavioral of hash_message_tb is
     signal hash_in  : hash_subsystem_input_type;
     signal hash_out : hash_subsystem_output_type;
 
-    -- Emulador de BRAM (Igual que en el top-level)
+    -- Emulador de Memoria
     type ram_type is array (0 to 2**BRAM_ADDR_SIZE - 1) of std_logic_vector(n*8 - 1 downto 0);
-    
+
     -- VECTORES OFICIALES NIST KAT (Firma 0)
     impure function init_bram return ram_type is
         variable mem_var : ram_type := (others => (others => '0'));
@@ -35,6 +34,10 @@ architecture Behavioral of hash_message_tb is
     end function;
 
     signal bram_memory : ram_type := init_bram;
+    
+    -- Señales para emular el DMA
+    signal mem_pending : std_logic := '0';
+    signal mem_addr_lat : std_logic_vector(31 downto 0) := (others => '0');
 
     -- Hash esperado EXACTO calculado desde Python
     constant EXP_MHASH : std_logic_vector(255 downto 0) := x"ef68acaa1577a4e834264f6e622310fff106e4b1d65b106a9937272269c0afdd";
@@ -78,12 +81,26 @@ begin
     hmsg_in.hash <= hash_out;
     hash_in      <= hmsg_out.hash;
 
-    -- Emulador BRAM (Lectura asíncrona/síncrona para el bus)
+    -- Emulador de DMA (Lectura con retardo de 1 ciclo)
+    hmsg_in.mem.gnt <= '1';
+    
     process(clk)
+        variable idx : integer;
     begin
         if rising_edge(clk) then
-            if hmsg_out.bram.en = '1' then
-                hmsg_in.bram.dout <= bram_memory(to_integer(unsigned(hmsg_out.bram.addr)));
+            hmsg_in.mem.valid <= '0';
+
+            if mem_pending = '1' then
+                -- Convertir dirección de bytes a índice de bloque de 256 bits
+                idx := to_integer(shift_right(unsigned(mem_addr_lat), 5));
+                hmsg_in.mem.data <= bram_memory(idx);
+                hmsg_in.mem.valid <= '1';
+                mem_pending <= '0';
+            end if;
+
+            if hmsg_out.mem.req = '1' then
+                mem_addr_lat <= hmsg_out.mem.addr;
+                mem_pending <= '1';
             end if;
         end if;
     end process;
@@ -112,27 +129,23 @@ begin
         report "=======================================================" severity note;
 
         wait until rising_edge(clk);
-        
         -- Configuramos los parámetros oficiales de la Firma 0
         hmsg_in.module_input.index <= to_unsigned(0, tree_height);
         hmsg_in.module_input.mlen  <= 112; -- Longitud de "Firma TFG VHDL" en bits
         hmsg_in.module_input.enable <= '1';
-        
         wait for clk_period;
         hmsg_in.module_input.enable <= '0';
 
-
-     -- Esperamos a que finalice la orquestación
+        -- Esperamos a que finalice la orquestación
         loop
             wait until rising_edge(clk);
             exit when hmsg_out.module_output.done = '1';
         end loop;
         
         -- Añadimos 1 ciclo de espera para alinearnos con el registro r.mhash
-        wait until rising_edge(clk); 
-        
+        wait until rising_edge(clk);
         report "    [MHASH OBTENIDO]: " & to_hex_string(hmsg_out.module_output.mhash) severity note;
-       
+
         if hmsg_out.module_output.mhash = EXP_MHASH then
             report "    [PASS] El calculo de mhash coincide con el vector oficial." severity note;
         else

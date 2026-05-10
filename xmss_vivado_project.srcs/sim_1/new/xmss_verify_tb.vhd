@@ -25,39 +25,39 @@ architecture Behavioral of xmss_verify_tb is
     signal hash_in  : hash_subsystem_input_type;
     signal hash_out : hash_subsystem_output_type;
 
-    signal bram_dout_a_reg, bram_dout_b_reg : std_logic_vector(255 downto 0) := (others => '0');
+    -- Emulador de Scratchpad Interno
+    type scratch_ram_type is array (0 to 127) of std_logic_vector(n*8-1 downto 0);
+    signal scratch_mem : scratch_ram_type := (others => (others => '0'));
     
-    -- =====================================================================
-    -- INYECCIÓN DEL TEST VECTOR KAT OFICIAL (NIST / RFC 8391)
-    -- =====================================================================
+    signal scratch_en_a, scratch_wen_a : std_logic;
+    signal scratch_addr_a : std_logic_vector(BRAM_ADDR_SIZE-1 downto 0);
+    signal scratch_din_a, scratch_dout_a : std_logic_vector(n*8-1 downto 0);
     
-     -- Semilla Publica Oficial 
+    signal scratch_en_b, scratch_wen_b : std_logic;
+    signal scratch_addr_b : std_logic_vector(BRAM_ADDR_SIZE-1 downto 0);
+    signal scratch_din_b, scratch_dout_b : std_logic_vector(n*8-1 downto 0);
+
+    -- Señales DMA
+    signal mem_req_sel  : mem_read_req;
+    signal mem_pending  : std_logic := '0';
+    signal mem_addr_lat : std_logic_vector(31 downto 0) := (others => '0');
+    signal mem_rvalid   : std_logic := '0';
+    signal mem_rdata    : std_logic_vector(n*8-1 downto 0) := (others => '0');
+
+    -- Datos KAT
     constant PUB_SEED : std_logic_vector(255 downto 0) := x"0C3052F5D059043BABFA627EA37C03D49191A2997D0833DA274137EDDEF66168";
+    constant PK_ROOT  : std_logic_vector(255 downto 0) := x"A3F3840A84B677379478D1DFE084F8F528F79C0DF72A9E8A937775EBECCF60F8";
+    constant MSG_BLOCK0 : std_logic_vector(255 downto 0) := x"4669726D6120544647205648444C000000000000000000000000000000000000";
 
     type ram_type is array (0 to 2**BRAM_ADDR_SIZE - 1) of std_logic_vector(n*8 - 1 downto 0);
 
     impure function init_bram return ram_type is
         variable mem_var : ram_type := (others => (others => '0'));
     begin
-        -- El módulo hash_message lee la raíz desde aquí (Dirección 0)
-        mem_var(BRAM_PK) := x"A3F3840A84B677379478D1DFE084F8F528F79C0DF72A9E8A937775EBECCF60F8";
+        mem_var(BRAM_XMSS_SIG) := x"0000000000000000000000000000000000000000000000000000000000000000";
+        mem_var(BRAM_XMSS_SIG + 1) := x"83BECF8807135195BC71DE8E314AC7A6ECEE8B5A6FCFF2FDAB00D9494A72968B";
         
-        -- 1. INDICE (Firma 0, rellenado a 256 bits)
-        mem_var(BRAM_XMSS_SIG) := x"0000000000000000000000000000000000000000000000000000000000000000"; 
-        
-        -- 2. RANDOMNESS (R)
-        mem_var(BRAM_XMSS_SIG + 1) := x"83BECF8807135195BC71DE8E314AC7A6ECEE8B5A6FCFF2FDAB00D9494A72968B"; 
-        
-        -- 3. PUB_SEED (AQUÍ ES DONDE EL HARDWARE LEE LA SEMILLA DE FORMA DINÁMICA AHORA)
-        mem_var(BRAM_XMSS_SIG + 2) := PUB_SEED; 
-        
-        -- 4. ROOT CALCULADA POR EL CÓDIGO EN C (La que debe abrir el "Candado")
-        mem_var(BRAM_XMSS_SIG + 3) := x"A3F3840A84B677379478D1DFE084F8F528F79C0DF72A9E8A937775EBECCF60F8"; 
-        
-        -- 5. MENSAJE: "Firma TFG VHDL" (Hex: 4669726D6120544647205648444C, padding con ceros a 256 bits)
-        mem_var(BRAM_MESSAGE) := x"4669726D6120544647205648444C000000000000000000000000000000000000";
-
-        -- 6. LOS 67 BLOQUES DE LA FIRMA WOTS+
+        -- WOTS
         mem_var(BRAM_XMSS_SIG_WOTS + 0) := x"49DADC5FE200C42CECE300CB71B0DD37E38D1DE0F766438F09C16028887D60D9";
         mem_var(BRAM_XMSS_SIG_WOTS + 1) := x"868C74920658323B7C9CDD670A68C9B7DE18C808EA42A2D4F9B4A5E3D70FF2F7";
         mem_var(BRAM_XMSS_SIG_WOTS + 2) := x"097FC69AC835B00E4B503FE75442D94A1D27FF63155B192697997D1F6F4C642C";
@@ -125,8 +125,8 @@ architecture Behavioral of xmss_verify_tb is
         mem_var(BRAM_XMSS_SIG_WOTS + 64) := x"7AEFC58455C0CC28C27FFAEE3ED2511A947F08B1219F87BB87801FED8EC57AA7";
         mem_var(BRAM_XMSS_SIG_WOTS + 65) := x"CE440979B66D9F2CCBF601BF5C9B7D3ECBA785BBDF8FCF47BF20B3FA8C289E92";
         mem_var(BRAM_XMSS_SIG_WOTS + 66) := x"BD33C36FFADFB5001399C653194F32D5224944B820A783D576B7359E02C04358";
-
-        -- 7. LOS 10 BLOQUES DEL AUTH PATH (Camino hacia la Raíz)
+        
+        -- AUTH PATH
         mem_var(BRAM_XMSS_SIG_AUTH + 0) := x"37B49DCB62EB3AD663A4571DDBCF4579AFB5945411E5D09615BA034B5C25C192";
         mem_var(BRAM_XMSS_SIG_AUTH + 1) := x"8619FA5BB10D6C7059165C99FBC1DF7669D00A5D80FA8AA14C7EE7137E0C00A9";
         mem_var(BRAM_XMSS_SIG_AUTH + 2) := x"2B2C207FF650B6816D8E9AAAC5FD1F8A75D72950BAE297017B40EFFB8E825EEC";
@@ -141,55 +141,129 @@ architecture Behavioral of xmss_verify_tb is
         return mem_var;
     end function;
 
-    signal bram_memory : ram_type := init_bram;
+    signal sig_memory : ram_type := init_bram;
     signal tb_enable : std_logic := '0';
 
 begin
 
-    -- Conexiones Síncronas
+    -- Ruteo Síncrono
     vrfy_in.enable <= tb_enable;
-    -- EL MENSAJE MIDE EXACTAMENTE 14 BYTES -> 14 * 8 = 112 BITS
-    vrfy_in.mlen <= 112; 
+    vrfy_in.mlen <= 112;
+
     vrfy_in.wots <= wots_out.module_output;
     vrfy_in.l_tree <= ltree_out.module_output;
     vrfy_in.thash <= thash_out.module_output;
     vrfy_in.hash_message <= hmsg_out.module_output;
-    vrfy_in.bram.a.dout <= bram_dout_a_reg;
-    vrfy_in.bram.b.dout <= bram_dout_b_reg;
 
-    process(vrfy_out, hash_out, bram_dout_b_reg) begin
-        hmsg_in.module_input <= vrfy_out.hash_message;
-        hmsg_in.hash <= hash_out;
-        hmsg_in.bram.dout <= bram_dout_b_reg;
-    end process;
+    -- Conexiones a módulos
+    hmsg_in.module_input <= vrfy_out.hash_message;
+    hmsg_in.hash <= hash_out;
 
-    process(vrfy_out, hash_out, bram_dout_b_reg) begin
-        wots_in.module_input <= vrfy_out.wots;
-        wots_in.pub_seed <= PUB_SEED;
-        wots_in.bram_b.dout <= bram_dout_b_reg;
-        wots_in.hash <= hash_out;
-    end process;
+    wots_in.module_input <= vrfy_out.wots;
+    wots_in.pub_seed <= PUB_SEED;
+    wots_in.hash <= hash_out;
 
-    process(vrfy_out, ltree_out, thash_out, hash_out, bram_dout_a_reg, bram_dout_b_reg) begin
-        ltree_in.module_input <= vrfy_out.l_tree;
-        ltree_in.bram.a.dout <= bram_dout_a_reg;
-        ltree_in.bram.b.dout <= bram_dout_b_reg;
-        ltree_in.thash <= thash_out.module_output;
-        
-        if vrfy_out.mode_select_l1 = "11" then
-            thash_in.module_input <= ltree_out.thash;
-        else
-            thash_in.module_input <= vrfy_out.thash;
-        end if;
-        thash_in.pub_seed <= PUB_SEED;
-        thash_in.hash <= hash_out;
-    end process;
+    ltree_in.module_input <= vrfy_out.l_tree;
+    ltree_in.thash <= thash_out.module_output;
+    
+    thash_in.module_input <= ltree_out.thash when vrfy_out.mode_select_l1 = "11" else vrfy_out.thash;
+    thash_in.pub_seed <= PUB_SEED;
+    thash_in.hash <= hash_out;
 
     hash_in <= hmsg_out.hash when vrfy_out.mode_select_l1 = "10" else 
                wots_out.hash when vrfy_out.mode_select_l1 = "01" else 
                thash_out.hash;
 
-    -- Instancias de tu Hardware Real
+    -- Mux BRAM Interna (Scratchpad)
+    process(vrfy_out, wots_out, ltree_out)
+    begin
+        scratch_en_a <= '0'; scratch_wen_a <= '0'; scratch_addr_a <= (others => '0'); scratch_din_a <= (others => '0');
+        scratch_en_b <= '0'; scratch_wen_b <= '0'; scratch_addr_b <= (others => '0'); scratch_din_b <= (others => '0');
+
+        if vrfy_out.mode_select_l1 = "01" then
+            scratch_en_a <= wots_out.bram.a.en; scratch_wen_a <= wots_out.bram.a.wen;
+            scratch_addr_a <= wots_out.bram.a.addr; scratch_din_a <= wots_out.bram.a.din;
+            scratch_en_b <= wots_out.bram.b.en; scratch_wen_b <= wots_out.bram.b.wen;
+            scratch_addr_b <= wots_out.bram.b.addr; scratch_din_b <= wots_out.bram.b.din;
+        elsif vrfy_out.mode_select_l1 = "11" then
+            scratch_en_a <= ltree_out.bram.a.en; scratch_wen_a <= ltree_out.bram.a.wen;
+            scratch_addr_a <= ltree_out.bram.a.addr; scratch_din_a <= ltree_out.bram.a.din;
+            scratch_en_b <= ltree_out.bram.b.en; scratch_wen_b <= ltree_out.bram.b.wen;
+            scratch_addr_b <= ltree_out.bram.b.addr; scratch_din_b <= ltree_out.bram.b.din;
+        end if;
+    end process;
+
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            if scratch_en_a = '1' then
+                if scratch_wen_a = '1' then scratch_mem(to_integer(unsigned(scratch_addr_a))) <= scratch_din_a; end if;
+                scratch_dout_a <= scratch_mem(to_integer(unsigned(scratch_addr_a)));
+            end if;
+            if scratch_en_b = '1' then
+                if scratch_wen_b = '1' then scratch_mem(to_integer(unsigned(scratch_addr_b))) <= scratch_din_b; end if;
+                scratch_dout_b <= scratch_mem(to_integer(unsigned(scratch_addr_b)));
+            end if;
+        end if;
+    end process;
+    
+    ltree_in.bram.a.dout <= scratch_dout_a;
+    ltree_in.bram.b.dout <= scratch_dout_b;
+
+    -- Mux DMA Externo
+    process(vrfy_out, hmsg_out, wots_out, mem_rvalid, mem_rdata)
+    begin
+        mem_req_sel <= mem_read_req_zero;
+        vrfy_in.mem <= mem_read_rsp_zero;
+        hmsg_in.mem <= mem_read_rsp_zero;
+        wots_in.sig_mem <= mem_read_rsp_zero;
+
+        if vrfy_out.mode_select_l1 = "10" then
+            mem_req_sel <= hmsg_out.mem;
+            hmsg_in.mem.gnt <= '1';
+            hmsg_in.mem.valid <= mem_rvalid;
+            hmsg_in.mem.data <= mem_rdata;
+        elsif vrfy_out.mode_select_l1 = "01" then
+            mem_req_sel <= wots_out.sig_mem;
+            wots_in.sig_mem.gnt <= '1';
+            wots_in.sig_mem.valid <= mem_rvalid;
+            wots_in.sig_mem.data <= mem_rdata;
+        elsif vrfy_out.mode_select_l1 = "00" then
+            mem_req_sel <= vrfy_out.mem;
+            vrfy_in.mem.gnt <= '1';
+            vrfy_in.mem.valid <= mem_rvalid;
+            vrfy_in.mem.data <= mem_rdata;
+        end if;
+    end process;
+
+    process(clk)
+        variable addr_bytes : unsigned(31 downto 0);
+        variable idx : integer;
+    begin
+        if rising_edge(clk) then
+            mem_rvalid <= '0';
+            if mem_pending = '1' then
+                addr_bytes := unsigned(mem_addr_lat);
+                idx := to_integer(shift_right(addr_bytes, 5)); -- Convierte bytes a índices de 256 bits
+
+                if addr_bytes = to_unsigned(BRAM_PK * 32, 32) then mem_rdata <= PK_ROOT;
+                elsif addr_bytes = to_unsigned((BRAM_PK+1) * 32, 32) then mem_rdata <= PUB_SEED;
+                elsif addr_bytes >= to_unsigned(BRAM_MESSAGE * 32, 32) then mem_rdata <= MSG_BLOCK0;
+                else mem_rdata <= sig_memory(idx);
+                end if;
+                
+                mem_rvalid <= '1';
+                mem_pending <= '0';
+            end if;
+
+            if mem_req_sel.req = '1' then
+                mem_addr_lat <= mem_req_sel.addr;
+                mem_pending <= '1';
+            end if;
+        end if;
+    end process;
+
+    -- Instancias
     uut : entity work.xmss_verify port map(clk => clk, reset => reset, d => vrfy_in, q => vrfy_out);
     hms: entity work.hash_message port map(clk => clk, reset => reset, d => hmsg_in, q => hmsg_out);
     wts: entity work.wots port map(clk => clk, reset => reset, d => wots_in, q => wots_out);
@@ -197,43 +271,9 @@ begin
     ths: entity work.thash_h port map(clk => clk, reset => reset, d => thash_in, q => thash_out);
     hco: entity work.hash_core_collection port map(clk => clk, reset => reset, d => hash_in, q => hash_out);
 
-    process begin
-        clk <= '1'; wait for clk_period / 2;
-        clk <= '0'; wait for clk_period / 2;
-    end process;
+    process begin clk <= '1'; wait for clk_period / 2; clk <= '0'; wait for clk_period / 2; end process;
 
-    -- Multiplexor de Memoria BRAM
-    process(clk)
-        variable addr_a, addr_b : integer;
-        variable wen_a, wen_b : std_logic;
-        variable din_a, din_b : std_logic_vector(255 downto 0);
-    begin
-        if rising_edge(clk) then
-            if vrfy_out.mode_select_l1 = "01" then
-                addr_a := to_integer(unsigned(wots_out.bram.a.addr)); wen_a := wots_out.bram.a.wen; din_a := wots_out.bram.a.din;
-                addr_b := to_integer(unsigned(wots_out.bram.b.addr)); wen_b := wots_out.bram.b.wen; din_b := wots_out.bram.b.din;
-            elsif vrfy_out.mode_select_l1 = "11" then
-                addr_a := to_integer(unsigned(ltree_out.bram.a.addr)); wen_a := ltree_out.bram.a.wen; din_a := ltree_out.bram.a.din;
-                addr_b := to_integer(unsigned(ltree_out.bram.b.addr)); wen_b := ltree_out.bram.b.wen; din_b := ltree_out.bram.b.din;
-            else
-                addr_a := to_integer(unsigned(vrfy_out.bram.a.addr)); wen_a := vrfy_out.bram.a.wen; din_a := vrfy_out.bram.a.din;
-                if vrfy_out.mode_select_l1 = "10" then
-                    addr_b := to_integer(unsigned(hmsg_out.bram.addr)); wen_b := hmsg_out.bram.wen; din_b := hmsg_out.bram.din;
-                else
-                    addr_b := to_integer(unsigned(vrfy_out.bram.b.addr)); wen_b := vrfy_out.bram.b.wen; din_b := vrfy_out.bram.b.din;
-                end if;
-            end if;
-
-            if wen_a = '1' then bram_memory(addr_a) <= din_a; end if;
-            if wen_b = '1' then bram_memory(addr_b) <= din_b; end if;
-            
-            bram_dout_a_reg <= bram_memory(addr_a);
-            bram_dout_b_reg <= bram_memory(addr_b);
-        end if;
-    end process;
-
-    -- Secuencia de Ejecución
-   -- Secuencia de Ejecución
+    -- Secuencia
     process
     begin
         reset <= '1';
@@ -243,39 +283,22 @@ begin
         wait for 50 ns;
         
         report "===========================================================" severity note;
-        report "=== INICIANDO PRUEBA KAT (KNOWN ANSWER TEST) DEFINITIVA ===" severity note;
-        report "===========================================================" severity note;
+        report "=== INICIANDO PRUEBA KAT EN VERIFY ISLADO ===" severity note;
         
         wait until rising_edge(clk);
-        
-        -- NUEVO COMPORTAMIENTO TIPO "HOST": Mantenemos el enable ALTO
-        tb_enable <= '1'; 
-        
-        -- Esperamos a que el acelerador termine su orquestación
+        tb_enable <= '1';
+
         wait until vrfy_out.done = '1';
-        
-        report " " severity note;
         report "=== VERIFICACION FINALIZADA ===" severity note;
-        
-        -- Leemos el resultado MIENTRAS el done está arriba
+
         if vrfy_out.valid = STATUS_VALID then
             report "    [PASS] FIRMA VALIDA. LAS RAICES SON IGUALES" severity note;
         else
-            report "    [FAIL] RESULTADO DE LA FIRMA: VALID = 0 (Las raices no coinciden)" severity error;
+            report "    [FAIL] RESULTADO DE LA FIRMA: INVALIDO" severity error;
         end if;
-        report "===========================================================" severity note;
         
-        -- El procesador ha leído el resultado y da acuse de recibo bajando el enable
         wait for clk_period;
         tb_enable <= '0';
-        
-        -- Comprobamos que el sistema obedece, limpia el valid y vuelve a reposo
-        wait for 4 * clk_period;
-        if vrfy_out.valid = STATUS_IDLE and vrfy_out.done = '0' then
-             report "    [INFO] Sistema reseteado y en reposo correctamente." severity note;
-        end if;
-        
         wait;
     end process;
-
 end Behavioral;
