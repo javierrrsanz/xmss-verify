@@ -226,7 +226,7 @@ begin
         reset <= '1';
         enable <= '0';
         -- Mensaje: "Firma TFG VHDL" (14 bytes = 112 bits)
-        mlen <= std_logic_vector(to_unsigned(112, 32));
+        mlen <= std_logic_vector(to_unsigned(8*33752, 32));
         wait for 100 ns;
         wait until rising_edge(clk);
         reset <= '0';
